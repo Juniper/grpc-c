@@ -1,0 +1,36 @@
+# Object files
+*.o
+
+# Libraries
+*.lib
+*.a
+*.la
+*.so
+*.lo
+**/.libs
+
+# Shared objects
+*.so
+*.so.*
+*.dylib
+
+*~
+*.orig
+
+aclocal.m4
+ar-lib
+autom4te.cache
+build
+compile
+config.guess
+config.h.in
+config.sub
+depcomp
+install-sh
+ltmain.sh
+missing
+**/Makefile.in
+**/Makefile
+
+configure
+m4/*
