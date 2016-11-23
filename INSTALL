@@ -1,0 +1,19 @@
+# Installation
+
+autoreconf --install
+git submodule update --init
+mkdir build && cd build
+../configure
+make
+sudo make install
+
+# Example
+
+cd build/examples
+make foo.grpc-c.c
+make
+
+This should build foo_client and foo_server. To run example code, 
+
+sudo ./foo_server test
+sudo ./foo_client test
