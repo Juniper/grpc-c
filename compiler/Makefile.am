@@ -7,22 +7,22 @@ bin_PROGRAMS = protoc-gen-grpc-c
 
 AUTOMAKE_OPTIONS = subdir-objects
 
-PROTOC_C_PATH = ${srcdir}/../../protobuf-c/protoc-c
+PROTOC_C_PATH = ${srcdir}/../third_party/protobuf-c/protoc-c
 
 protoc_gen_grpc_c_SOURCES = \
-    ../../protobuf-c/protoc-c/c_bytes_field.cc \
-    ../../protobuf-c/protoc-c/c_enum.cc \
-    ../../protobuf-c/protoc-c/c_enum_field.cc \
-    ../../protobuf-c/protoc-c/c_extension.cc \
-    ../../protobuf-c/protoc-c/c_field.cc \
-    ../../protobuf-c/protoc-c/c_file.cc \
-    ../../protobuf-c/protoc-c/c_generator.cc \
-    ../../protobuf-c/protoc-c/c_helpers.cc \
-    ../../protobuf-c/protoc-c/c_message.cc \
-    ../../protobuf-c/protoc-c/c_message_field.cc \
-    ../../protobuf-c/protoc-c/c_primitive_field.cc \
-    ../../protobuf-c/protoc-c/c_service.cc \
-    ../../protobuf-c/protoc-c/c_string_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_bytes_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_enum.cc \
+    ../third_party/protobuf-c/protoc-c/c_enum_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_extension.cc \
+    ../third_party/protobuf-c/protoc-c/c_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_file.cc \
+    ../third_party/protobuf-c/protoc-c/c_generator.cc \
+    ../third_party/protobuf-c/protoc-c/c_helpers.cc \
+    ../third_party/protobuf-c/protoc-c/c_message.cc \
+    ../third_party/protobuf-c/protoc-c/c_message_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_primitive_field.cc \
+    ../third_party/protobuf-c/protoc-c/c_service.cc \
+    ../third_party/protobuf-c/protoc-c/c_string_field.cc \
     grpc_c_file.cc \
     grpc_c_generator.cc \
     grpc_c_helpers.cc \
@@ -36,6 +36,6 @@ protoc_gen_grpc_c_LDADD = \
 
 AM_CXXFLAGS = \
     -I${srcdir} \
-    -I${srcdir}/../../protobuf-c \
-    -I${srcdir}/../../protobuf-c/protobuf-c
+    -I${srcdir}/../third_party/protobuf-c \
+    -I${srcdir}/../third_party/protobuf-c/protobuf-c
 
