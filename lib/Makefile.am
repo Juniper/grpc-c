@@ -24,6 +24,7 @@ AM_CFLAGS = \
     -I${srcdir}/h \
     -I${srcdir}/../third_party/protobuf-c
 
-libgrpc_c_la_LIBADD = \
-    /usr/local/lib/libgrpc.a \
-    /usr/local/lib/libgpr.a
+install-exec-hook:
+	@echo Installing header files ... ; \
+	    ${MKDIR} -p ${includedir}/grpc-c ; \
+	    ${CP} ${srcdir}/h/grpc-c/grpc-c.h ${includedir}/grpc-c/grpc-c.h ;

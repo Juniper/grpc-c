@@ -8,6 +8,18 @@ AC_PREREQ(2.59)
 AC_INIT([grpc-c], [0.1], [nitk.ajay@gmail.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign -Wno-portability])
 
+case $prefix in
+    NONE)
+	prefix=/usr/local
+	;;
+esac
+
+case $exec_prefix in
+    NONE)
+	exec_prefix=$prefix
+	;;
+esac
+
 AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_INSTALL
@@ -21,6 +33,9 @@ AC_CONFIG_FILES([
 ])
 
 LT_INIT([shared])
+
+AC_PATH_PROG(CP, cp, /bin/cp)
+AC_PATH_PROG(MKDIR, mkdir, /bin/mkdir)
 
 AC_PROG_LN_S
 
