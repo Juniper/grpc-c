@@ -11,8 +11,8 @@
 /*
  * Allocate and initialize context object
  */
-grpc_c_context_t 
-*grpc_c_context_init (struct grpc_c_method_t *method, int is_client);
+grpc_c_context_t *
+grpc_c_context_init (struct grpc_c_method_t *method, int is_client);
 
 /*
  * Destroy and free context

@@ -17,11 +17,11 @@ foo.grpc-c.c foo.grpc-c.h foo.grpc-c.service.c:
 	protoc -I ${srcdir} --grpc-c_out=. --plugin=protoc-gen-grpc-c=../compiler/protoc-gen-grpc-c ${srcdir}/foo.proto
 
 LDADD = \
+    ../lib/libgrpc-c.la \
     /usr/local/lib/libgrpc.a \
     /usr/local/lib/libgpr.a \
     /usr/local/lib/libprotobuf-c.a \
-    -lpthread \
-    ../lib/libgrpc-c.la
+    -lpthread
 
 LDLIBS = 
 

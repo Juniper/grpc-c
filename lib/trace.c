@@ -14,7 +14,12 @@
 /*
  * Trace function callback
  */
-static grpc_c_trace_callback_t *trace_cb = NULL;
+static grpc_c_trace_callback_t *trace_cb;
+
+/*
+ * This will enable grpc-c traces
+ */
+int gc_trace;
 
 /*
  * Internal grpc-c trace callback that gets registered into grpc context
@@ -65,12 +70,7 @@ gc_trace_enable_by_flag (int flags, int enabled)
 {
     if (flags & GRPC_C_TRACE_ALL) {
 	grpc_tracer_set_enabled("all", enabled);
-
-	/*
-	 * grpc_tracer_set_enabled for all enables all even if we mark for
-	 * disabling. We disable everything explicitly in this case
-	 */
-	if (enabled) return;
+	return;
     }
 
     if (flags & GRPC_C_TRACE_TCP) {
@@ -108,15 +108,57 @@ gc_trace_enable_by_flag (int flags, int enabled)
     if (flags & GRPC_C_TRACE_TRANSPORT_SECURITY) {
 	grpc_tracer_set_enabled("transport_security", enabled);
     }
+
+    if (flags & GRPC_C_TRACE_ROUND_ROBIN) {
+	grpc_tracer_set_enabled("round_robin", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_HTTP_WRITE_STATE) {
+	grpc_tracer_set_enabled("http_write_state", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_API) {
+	grpc_tracer_set_enabled("api", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_CHANNEL_STACK_BUILDER) {
+	grpc_tracer_set_enabled("channel_stack_builder", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_HTTP1) {
+	grpc_tracer_set_enabled("http1", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_COMPRESSION) {
+	grpc_tracer_set_enabled("compression", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_QUEUE_PLUCK) {
+	grpc_tracer_set_enabled("queue_pluck", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_QUEUE_TIMEOUT) {
+	grpc_tracer_set_enabled("queue_timeout", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_OP_FAILURE) {
+	grpc_tracer_set_enabled("op_failure", enabled);
+    }
+
+    if (flags & GRPC_C_TRACE_CORE) {
+	grpc_tracer_set_enabled("grpc_c_core", enabled);
+    }
+
 }
 
 /*
  * Enable tracing by flags
  */
 void 
-grpc_c_trace_enable (int flags)
+grpc_c_trace_enable (int flags, int severity)
 {
     gc_trace_enable_by_flag(flags, 1);
+    gpr_set_log_verbosity(severity);
 }
 
 /*
@@ -144,4 +186,5 @@ void
 grpc_c_trace_init ()
 {
     gpr_set_log_function(gc_gpr_log);
+    grpc_register_tracer("grpc_c_core", &gc_trace);
 }

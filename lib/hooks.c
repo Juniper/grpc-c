@@ -3,8 +3,8 @@
  * All rights reserved.
  */
 
-#include <grpc/support/cpu.h>
 #include <grpc-c/grpc-c.h>
+#include <grpc/support/cpu.h>
 
 #include "hooks.h"
 #include "thread_pool.h"
@@ -14,7 +14,7 @@ static grpc_c_hook_t gc_hook;
 static grpc_c_thread_pool_t *gc_tpool;
 
 /*
- * Initiazlies local copy of hook callback functions. This will get called
+ * Initializes local copy of hook callback functions. This will get called
  * from libgrpc isc and task layer
  */
 void 
@@ -28,20 +28,24 @@ grpc_c_hook_init (grpc_c_hook_t *hook)
 	gc_hook.gch_set_disconnect_cb = hook->gch_set_disconnect_cb;
 	gc_hook.gch_set_evcontext = hook->gch_set_evcontext;
 	gc_hook.gch_set_client_task = hook->gch_set_client_task;
+	gc_hook.gch_set_client_socket_create_cb 
+	    = hook->gch_set_client_socket_create_cb;
+	gc_hook.gch_client_try_connect = hook->gch_client_try_connect;
+	gc_hook.gch_client_cancel_try_connect 
+	    = hook->gch_client_cancel_try_connect;
 	gc_hook.gch_post_init = hook->gch_post_init;
     }
 }
 
 /*
- * Returns client id set in channel
+ * Returns client id set in call
  */
 const char *
-grpc_c_get_client_id_from_channel (grpc_channel *channel)
+grpc_c_grpc_get_client_id (grpc_call *call)
 {
-    if (channel && gc_hook.gch_get_client_id) {
-	return gc_hook.gch_get_client_id(channel);
+    if (call && gc_hook.gch_get_client_id) {
+	return gc_hook.gch_get_client_id(call);
     }
-
     return NULL;
 }
 
@@ -58,11 +62,11 @@ grpc_c_get_type ()
  * Sets disconnect callback into transport
  */
 void 
-grpc_c_grpc_set_disconnect_cb (grpc_channel *channel, 
+grpc_c_grpc_set_disconnect_cb (grpc_call *call, 
 			       grpc_c_client_disconnect_callback_t *cb)
 {
-    if (channel && gc_hook.gch_set_disconnect_cb) {
-	gc_hook.gch_set_disconnect_cb(channel, cb);
+    if (call && gc_hook.gch_set_disconnect_cb) {
+	gc_hook.gch_set_disconnect_cb(call, cb);
     }
 }
 
@@ -70,10 +74,10 @@ grpc_c_grpc_set_disconnect_cb (grpc_channel *channel,
  * Sets client id into transport
  */
 void 
-grpc_c_grpc_set_client_id (grpc_channel *channel, const char *id)
+grpc_c_grpc_set_client_id (grpc_call *call, const char *id)
 {
-    if (channel && gc_hook.gch_set_client_id) {
-	gc_hook.gch_set_client_id(channel, id);
+    if (call && gc_hook.gch_set_client_id) {
+	gc_hook.gch_set_client_id(call, id);
     }
 }
 
@@ -108,6 +112,42 @@ grpc_c_grpc_set_cq_callback (grpc_completion_queue *cq,
 {
     if (gc_hook.gch_set_cq_callback) {
 	gc_hook.gch_set_cq_callback(cq, cb);
+    }
+}
+
+/*
+ * Sets callback that gets called when socket on client is created
+ */
+void 
+grpc_c_grpc_set_client_socket_create_callback (void (*fp)(int fd, 
+							  const char *uri))
+{
+    if (gc_hook.gch_set_client_socket_create_cb) {
+	gc_hook.gch_set_client_socket_create_cb(fp);
+    }
+}
+
+/*
+ * Attempts to connect to server from client. Returns 0 on success
+ */
+int 
+grpc_c_grpc_client_try_connect (long timeout, void (*timeout_cb)(void *data), 
+				void *timeout_cb_arg, void **tag) {
+    if (gc_hook.gch_client_try_connect) {
+	return gc_hook.gch_client_try_connect(timeout, timeout_cb, 
+					       timeout_cb_arg, tag);
+    }
+    return 1;
+}
+
+/*
+ * Cancels a connection retry attempt to server from client
+ */
+void 
+grpc_c_grpc_client_cancel_try_connect (void *closure) 
+{
+    if (gc_hook.gch_client_cancel_try_connect) {
+	gc_hook.gch_client_cancel_try_connect(closure);
     }
 }
 

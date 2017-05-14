@@ -98,6 +98,12 @@ gc_client_create_by_host (const char *host, const char *id)
 					      (void *) client);
     }
 
+    /*
+     * Create list head to hold context objects that will have to be freed
+     * before exit
+     */
+    LIST_INIT(&client->gcc_context_list_head);
+
     return client;
 }
 
@@ -150,6 +156,8 @@ grpc_c_client_init (const char *server_name, const char *client_id,
 void
 grpc_c_client_free (grpc_c_client_t *client)
 {
+    grpc_c_context_t *ctx;
+
     if (client != NULL) {
 	/*
 	 * Wait till we are done with all the callbacks
@@ -165,10 +173,18 @@ grpc_c_client_free (grpc_c_client_t *client)
 	}
 
 	if (client->gcc_host) free(client->gcc_host);
+	if (client->gcc_id) free(client->gcc_id);
+
+	/*
+	 * If we have any active context objects, free them before shutting
+	 * down completion queue
+	 */
+	while (!LIST_EMPTY(&client->gcc_context_list_head)) {
+	    ctx = LIST_FIRST(&client->gcc_context_list_head);
+	    grpc_c_context_free(ctx);
+	}
 
 	if (client->gcc_channel) grpc_channel_destroy(client->gcc_channel);
-
-	if (client->gcc_id) free(client->gcc_id);
 
 	if (client->gcc_channel_connectivity_cq) {
 	    grpc_completion_queue_shutdown(client->gcc_channel_connectivity_cq);
@@ -370,10 +386,16 @@ gc_prepare_client_callback (grpc_c_context_t *context)
      */
     if (context->gcc_method_funcs->gcmf_handler.gcmfh_client == NULL) {
 	/*
-	 * Free context and return failure if there is no client callback
+	 * Free context and return failure if there is no client callback. If
+	 * the status is cancelled, it means we have hit timedout sync call
 	 */
-	grpc_c_context_free(context);
-	return 1;
+	if (context->gcc_status == GRPC_STATUS_CANCELLED) {
+	    grpc_c_context_free(context);
+	    return 0;
+	} else {
+	    grpc_c_context_free(context);
+	    return 1;
+	}
     } else if (context->gcc_payload && 
 	       grpc_byte_buffer_length((grpc_byte_buffer *)context->gcc_payload) 
 	       > 0) {
@@ -424,6 +446,67 @@ gc_prepare_client_callback (grpc_c_context_t *context)
 }
 
 /*
+ * On receiving a successful complete op on connectivity cq, this handles
+ * connect and disconnect callbacks
+ */
+static int 
+gc_handle_client_connectivity_complete_op (grpc_c_client_t *client, 
+					   grpc_completion_queue *cq)
+{
+    int shutdown = 0;
+
+    if (client == NULL || cq == NULL) {
+	gpr_log(GPR_ERROR, "Invalid client or cq in connectivity completion\n");
+	return shutdown;
+    }
+
+    grpc_connectivity_state s 
+	= grpc_channel_check_connectivity_state(client->gcc_channel, 0);
+
+    /*
+     * If our current state is failure, our connection to server is dropped
+     */
+    if (s == GRPC_CHANNEL_TRANSIENT_FAILURE || s == GRPC_CHANNEL_SHUTDOWN 
+	|| (client->gcc_channel_state == GRPC_CHANNEL_READY 
+	    && s == GRPC_CHANNEL_IDLE)) {
+	/*
+	 * If we are already connected and a disconnect cb is registered, call
+	 * it
+	 */
+	if (client->gcc_server_disconnect_cb && client->gcc_connected) {
+	    client->gcc_server_disconnect_cb(client);
+	}
+	client->gcc_connected = 0;
+	shutdown = 1;
+    } else if (s == GRPC_CHANNEL_READY) {
+	/*
+	 * If this is from a retry attempt, we have to stop retrying now
+	 */
+	if (client->gcc_retry_tag && client->gcc_connected == 0) {
+	    grpc_c_grpc_client_cancel_try_connect(client->gcc_retry_tag);
+	}
+
+	/*
+	 * If our previous state is connecting and we are ready now, we just
+	 * established a connection
+	 */
+	if (client->gcc_server_connect_cb && client->gcc_connected == 0) {
+	    client->gcc_connected = 1;
+	    client->gcc_server_connect_cb(client);
+	}
+    }
+    client->gcc_channel_state = s;
+
+    /*
+     * Watch for change in channel connectivity
+     */
+    grpc_channel_watch_connectivity_state(client->gcc_channel, s, 
+					  gpr_inf_future(GPR_CLOCK_REALTIME), 
+					  cq, client);
+    return shutdown;
+}
+
+/*
  * Handler for connection state change events. This gets called whenever there
  * is a change in the state of connection in a given channel. Event tag has a
  * pointer to client object
@@ -442,46 +525,18 @@ gc_handle_connectivity_change (grpc_completion_queue *cq)
 	switch (ev.type) {
 	    case GRPC_OP_COMPLETE:
 		/*
+		 * If the op failed, skip handling it
+		 */
+		if (ev.success == 0) break;
+
+		/*
 		 * Get current channel connectivity state and compare it
 		 * against the last state
 		 */
-		client = (grpc_c_client_t *) ev.tag;
-		grpc_connectivity_state s 
-		    = grpc_channel_check_connectivity_state(client->gcc_channel, 
-							    0);
-
-		/*
-		 * If our current state is failure, our connection to server
-		 * is dropped
-		 */
-		if (s == GRPC_CHANNEL_TRANSIENT_FAILURE || 
-		    s == GRPC_CHANNEL_SHUTDOWN) {
-		    if (client->gcc_server_disconnect_cb) {
-			client->gcc_server_disconnect_cb(client);
-		    }
-		} else {
-		    /*
-		     * If our previous state is connecting and we are ready
-		     * now, we just established a connection
-		     */
-		    if ((client->gcc_channel_state == GRPC_CHANNEL_IDLE 
-			 || client->gcc_channel_state == GRPC_CHANNEL_CONNECTING) 
-			&& s == GRPC_CHANNEL_READY) {
-			if (client->gcc_server_connect_cb) {
-			    client->gcc_server_connect_cb(client);
-			}
-		    }
+		client = (grpc_c_client_t *)ev.tag;
+		if (gc_handle_client_connectivity_complete_op(client, cq)) {
+		    shutdown = 1;
 		}
-
-		client->gcc_channel_state = s;
-
-		/*
-		 * Watch for change in channel connectivity
-		 */
-		grpc_channel_watch_connectivity_state(client->gcc_channel, s, 
-						      gpr_inf_future(GPR_CLOCK_REALTIME), 
-						      cq, (void *) client);
-
 		break;
 	    case GRPC_QUEUE_SHUTDOWN:
 		shutdown = 1;
@@ -521,25 +576,34 @@ gc_handle_client_event_internal (grpc_completion_queue *cq,
 		if (context) {
 		    client = context->gcc_data.gccd_client;
 		}
-		GPR_ASSERT(gc_prepare_client_callback(context) == 0);
+		/*
+		 * If the event succesfully completed, let the client handle
+		 * the response. Else silently clean the context
+		 */
+		if (ev.success) {
+		    GPR_ASSERT(gc_prepare_client_callback(context) == 0);
+		} else if (context) {
+		    grpc_c_context_free(context);
+		}
 		break;
 	    case GRPC_QUEUE_SHUTDOWN:
 		grpc_completion_queue_destroy(cq);
-		gpr_mu_lock(&client->gcc_lock);
-		client->gcc_running_cb--;
-		gpr_mu_unlock(&client->gcc_lock);
-		/*
-		 * If we are done executing all the callbacks, finish 
-		 * shutdown
-		 */
-		if (grpc_c_get_thread_pool()) {
-		    if (client->gcc_running_cb == 0 && client->gcc_shutdown) {
-			gpr_cv_signal(&client->gcc_shutdown_cv);
+		if (client) {
+		    gpr_mu_lock(&client->gcc_lock);
+		    client->gcc_running_cb--;
+		    gpr_mu_unlock(&client->gcc_lock);
+		    /*
+		     * If we are done executing all the callbacks, finish 
+		     * shutdown
+		     */
+		    if (grpc_c_get_thread_pool()) {
+			if (client->gcc_running_cb == 0 
+			    && client->gcc_shutdown) {
+			    gpr_cv_signal(&client->gcc_shutdown_cv);
+			}
+			gpr_cv_signal(&client->gcc_callback_cv);
 		    }
-
-		    gpr_cv_signal(&client->gcc_callback_cv);
 		}
-
 		shutdown = 1;
 		break;
 	    case GRPC_QUEUE_TIMEOUT:
@@ -641,28 +705,12 @@ gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input,
      * We need to send client-id as part of metadata with each RPC call. Make
      * space to hold metadata
      */
-    context->gcc_metadata->capacity += 1;
-    context->gcc_metadata->count += 1;
-    if (context->gcc_metadata->metadata != NULL) {
-	context->gcc_metadata->metadata = realloc(context->gcc_metadata->metadata, 
-						  context->gcc_metadata->capacity 
-						  * sizeof(grpc_metadata));
-    } else {
-	context->gcc_metadata->metadata = malloc(sizeof(grpc_metadata));
-    }
-
-    if (context->gcc_metadata->metadata == NULL) {
+    if (grpc_c_add_metadata(context, "client-id", 
+			    client->gcc_id ? client->gcc_id : "")) {
 	grpc_c_context_free(context);
-	gpr_log(GPR_ERROR, "Failed to (re)allocate memory for metadata");
+	gpr_log(GPR_ERROR, "Failed to add metadata");
 	return NULL;
     }
-	
-    context->gcc_metadata->metadata[context->gcc_metadata->count - 1].key 
-	= "client-id";
-    context->gcc_metadata->metadata[context->gcc_metadata->count - 1].value 
-	= client->gcc_id;
-    context->gcc_metadata->metadata[context->gcc_metadata->count - 1].value_length 
-	= client->gcc_id ? strlen(client->gcc_id) : 0;
 
     /*
      * Send initial metadata with client-id
@@ -721,12 +769,18 @@ gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input,
     context->gcc_op_count = op_count;
 
     /*
+     * Add this context object to list head so we can track this
+     */
+    LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
+		     context, gcc_list);
+
+    /*
      * If we are async, we need a thread in background to process events
      * from completion queue. Otherwise we pluck in the same thread
      */
     if (grpc_c_get_thread_pool() && !client->gcc_shutdown && !sync) {
 	grpc_c_thread_pool_add(grpc_c_get_thread_pool(), gc_run_rpc, 
-			     (void *)context->gcc_cq);
+			       context->gcc_cq);
     }
     gpr_mu_lock(&client->gcc_lock);
     client->gcc_running_cb++;
@@ -754,8 +808,6 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 			     grpc_c_method_data_free_t *output_free)
 {
     grpc_call_error e;
-    int rc = 1;
-
     grpc_c_context_t *context = gc_client_prepare_ops(client, 0, input, tag, 
 						      client_streaming, 
 						      server_streaming, 
@@ -767,7 +819,7 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 						      output_free);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context with async operations");
-	return rc;
+	return GRPC_C_FAIL;
     }
 
     /*
@@ -785,15 +837,13 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 
     if (e == GRPC_CALL_OK) {
 	context->gcc_op_count = 0;
-	rc = 0;
+	return GRPC_C_OK;
     } else {
 	gpr_log(GPR_ERROR, "Failed to finish batch operations on async call: "
 		"%d", e);
 	grpc_c_context_free(context);
-	rc = 1;
+	return GRPC_C_FAIL;
     }
-
-    return rc;
 }
 
 /*
@@ -813,6 +863,7 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 			    grpc_c_method_data_free_t *output_free, 
 			    long timeout)
 {
+    int rc = GRPC_C_OK;
     grpc_call_error e;
     grpc_event ev;
     gpr_timespec tout;
@@ -827,7 +878,8 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 						      output_free); 
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context with sync operations");
-	return 1;
+	rc = GRPC_C_FAIL;
+	goto cleanup;
     }
     
     context->gcc_call = grpc_channel_create_call(client->gcc_channel, 
@@ -846,7 +898,8 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 	grpc_c_context_free(context);
 	gpr_log(GPR_ERROR, "Failed to finish batch operations on sync call: "
 		"%d", e);
-	return 1;
+	rc = GRPC_C_FAIL;
+	goto cleanup;
     }
 
     /*
@@ -860,19 +913,37 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
     }
 
     ev = grpc_completion_queue_pluck(context->gcc_cq, context, tout, NULL);
-    if (ev.type != GRPC_OP_COMPLETE) {
+
+    /*
+     * If our sync call has timedout, cancel the call and return timedout. If
+     * cancel fails, mark that as failed call
+     */
+    if (ev.type == GRPC_QUEUE_TIMEOUT 
+	&& grpc_call_cancel(context->gcc_call, NULL) == GRPC_CALL_OK) {
+	gpr_log(GPR_ERROR, "Sync call timedout");
+	rc = GRPC_C_TIMEOUT;
+	goto cleanup;
+    } else if (ev.type != GRPC_OP_COMPLETE || ev.success == 0) {
+	grpc_c_context_free(context);
 	gpr_log(GPR_ERROR, "Failed to pluck sync event");
-	return 1;
+	rc = GRPC_C_FAIL;
+	goto cleanup;
     }
 
     /*
      * Decode the received data and point client provided pointer to this data
      */
-    if (context->gcc_payload && 
-	grpc_byte_buffer_length((grpc_byte_buffer *)context->gcc_payload) > 0) {
+    if (context->gcc_payload) {
 	*output = output_unpacker(context, context->gcc_payload);
     } else {
 	*output = NULL;
+    }
+
+    if (*output == NULL) {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "No output to return");
+	rc = GRPC_C_FAIL;
+	goto cleanup;
     }
 
     /*
@@ -891,7 +962,6 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 
     grpc_completion_queue *cq = context->gcc_cq;
     grpc_c_context_free(context);
-
     /*
      * We can destroy the completion_queue once it is shutdown
      */
@@ -899,6 +969,8 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 				      NULL).type != GRPC_QUEUE_SHUTDOWN)
 	;
     grpc_completion_queue_destroy(cq);
+
+cleanup:
     gpr_mu_lock(&client->gcc_lock);
     client->gcc_running_cb--;
     gpr_mu_unlock(&client->gcc_lock);
@@ -913,7 +985,7 @@ grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
         gpr_cv_signal(&client->gcc_callback_cv);
     }
 
-    return 0;
+    return rc;
 }
 
 /*
@@ -946,4 +1018,54 @@ void
 grpc_c_set_client_task (void *tp)
 {
     grpc_c_grpc_set_client_task(tp);
+}
+
+static void 
+gc_client_retry_timeout_cb (void *data) 
+{
+    grpc_c_client_t *client = (grpc_c_client_t *)data;
+    client->gcc_conn_timeout = 1;
+    client->gcc_connected = 0;
+    client->gcc_retry_tag = NULL;
+
+    if (client->gcc_server_disconnect_cb) {
+	client->gcc_server_disconnect_cb(client);
+    }
+}
+
+/*
+ * Tries to connect to server with given timeout in milliseconds. -1 will
+ * indefinitely try till a connection can be established
+ */
+int 
+grpc_c_client_try_connect (grpc_c_client_t *client, long timeout)
+{
+    client->gcc_channel_state 
+	= grpc_channel_check_connectivity_state(client->gcc_channel, 1);
+
+    if (grpc_c_grpc_client_try_connect(timeout, gc_client_retry_timeout_cb, 
+				       client, (void **)&client->gcc_retry_tag)) {
+	gpr_log(GPR_ERROR, "Failed to retry");
+	return 1;
+    }
+
+    return 0;
+}
+
+/*
+ * Cancels connection attempt
+ */
+void 
+grpc_c_client_cancel_connect (grpc_c_client_t *client)
+{
+    if (client && client->gcc_retry_tag) {
+	grpc_c_grpc_client_cancel_try_connect((void *)client->gcc_retry_tag);
+    }
+}
+
+void 
+grpc_c_register_client_socket_create_callback (void (*fp)(int fd, 
+							  const char *uri))
+{
+    grpc_c_grpc_set_client_socket_create_callback(fp);
 }

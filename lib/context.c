@@ -6,6 +6,8 @@
 #include <grpc-c/grpc-c.h>
 #include "context.h"
 #include "hooks.h"
+#include "trace.h"
+#include "metadata_array.h"
 
 /*
  * Create and initialize context
@@ -17,22 +19,11 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     if (context == NULL) {
 	return NULL;
     }
+    bzero(context, sizeof(grpc_c_context_t));
     
     context->gcc_method = method;
-    context->gcc_op_count = 0;
-    context->gcc_ops = NULL;
-    context->gcc_payload = NULL;
-    context->gcc_ops_payload = NULL;
-    context->gcc_cq = NULL;
     context->gcc_deadline = gpr_inf_future(GPR_CLOCK_REALTIME);
-    context->gcc_call = NULL;
-    context->gcc_meta_sent = 0;
-    context->gcc_reader = NULL;
-    context->gcc_writer = NULL;
-    context->gcc_writer_resolve_cb = NULL;
-    context->gcc_writer_resolve_args = NULL;
-    context->gcc_status_details = NULL;
-    context->gcc_status_details_capacity = 0;
+    context->gcc_client_cancel = 1;
     context->gcc_metadata = malloc(sizeof(grpc_metadata_array));
     if (context->gcc_metadata == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory in context for metadata");
@@ -79,6 +70,23 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
 }
 
 /*
+ * Frees key value pairs stored in metadata array
+ */
+static void 
+gc_metadata_storage_free (char **store, size_t count)
+{
+    size_t i;
+
+    if (store && count > 0) {
+	for (i = 0; i < count; i++) {
+	    free(store[2 * i]);
+	    free(store[2 * i + 1]);
+	}
+    }
+    free(store);
+}
+
+/*
  * Free the context object
  */
 void
@@ -86,19 +94,39 @@ grpc_c_context_free (grpc_c_context_t *context)
 {
     int i;
 
-    if (context->gcc_payload) grpc_byte_buffer_destroy(context->gcc_payload);
-
     if (context->gcc_metadata) {
+	/*
+	 * In case of client, we take a copy of key value pairs into metadata
+	 * array before sending to server. We have to free that data before
+	 * destroying metadata array
+	 */
+	if (context->gcc_is_client) {
+	    gc_metadata_storage_free(context->gcc_metadata_storage, 
+				     context->gcc_metadata->count);
+	}
 	grpc_metadata_array_destroy(context->gcc_metadata);
 	free(context->gcc_metadata);
     }
 
+    /*
+     * In server, we take copy of key value pairs of initial and trailing
+     * metadata before sending over wire. We have to free them before
+     * destroying these arrays
+     */
     if (context->gcc_initial_metadata) {
+	if (!context->gcc_is_client) {
+	    gc_metadata_storage_free(context->gcc_initial_metadata_storage, 
+				     context->gcc_initial_metadata->count);
+	}
 	grpc_metadata_array_destroy(context->gcc_initial_metadata);
 	free(context->gcc_initial_metadata);
     }
 
     if (context->gcc_trailing_metadata) {
+	if (!context->gcc_is_client) {
+	    gc_metadata_storage_free(context->gcc_trailing_metadata_storage, 
+				     context->gcc_trailing_metadata->count);
+	}
 	grpc_metadata_array_destroy(context->gcc_trailing_metadata);
 	free(context->gcc_trailing_metadata);
     }
@@ -112,10 +140,11 @@ grpc_c_context_free (grpc_c_context_t *context)
 
     if (context->gcc_ops_payload != NULL) {
 	/*
-	 * Do not free ops if someone is already waiting on them
-	 * TODO: add log message and exit properly
+	 * Log if we are freeing context that is still in use
 	 */
-	if (context->gcc_op_count != 0) exit(1);
+	if (context->gcc_op_count != 0) {
+	    gpr_log(GPR_ERROR, "Freeing context that is still in use");
+	}
 
 	for (i = 0; i < context->gcc_op_capacity; i++) {
 	    if (context->gcc_ops_payload[i] != NULL) {
@@ -129,7 +158,9 @@ grpc_c_context_free (grpc_c_context_t *context)
 
     if (context->gcc_writer) free(context->gcc_writer);
 
-    if (context->gcc_is_client && context->gcc_method) free(context->gcc_method);
+    if (context->gcc_is_client && context->gcc_method) {
+	free(context->gcc_method);
+    }
 
     if (context->gcc_method_funcs) free(context->gcc_method_funcs);
 
@@ -145,8 +176,38 @@ grpc_c_context_free (grpc_c_context_t *context)
 	}
     }
 
+    /*
+     * If we are freeing this context without using it, free corresponding
+     * event and mutex memory
+     */
+    if (context->gcc_state == GRPC_C_SERVER_CALLBACK_WAIT 
+	|| !grpc_c_get_thread_pool()) {
+	if (context->gcc_lock) free(context->gcc_lock);
+    }
+
+    /*
+     * If this is context from client, remove this from list of contexts that
+     * we are tracking
+     */
+    if (context->gcc_is_client) {
+	LIST_REMOVE(context, gcc_list);
+    }
+
+    if (context->gcc_payload) grpc_byte_buffer_destroy(context->gcc_payload);
+
+    /*
+     * Mark event tag corresponding to this context for cleanup
+     */
+    if (context->gcc_event) {
+	if (context->gcc_state == GRPC_C_SERVER_CALLBACK_WAIT) {
+	    free(context->gcc_event);
+	} else {
+	    context->gcc_event->gce_type = GRPC_C_EVENT_CLEANUP;
+	    context->gcc_event->gce_data = NULL;
+	}
+    }
+
     free(context);
-    context = NULL;
 }
 
 /*
@@ -197,4 +258,81 @@ grpc_c_ops_alloc (grpc_c_context_t *context, int count)
     }
 
     return 0;
+}
+
+/*
+ * Extracts the value for a key from the metadata array. Returns NULL if given
+ * key is not present
+ */
+const char *
+grpc_c_get_metadata_by_key (grpc_c_context_t *context, const char *key)
+{
+    if (context) {
+	return grpc_get_metadata_by_array(context->gcc_metadata, key);
+    }
+    return NULL;
+}
+
+/*
+ * Returns value for given key fro initial metadata array
+ */
+const char *
+grpc_c_get_initial_metadata_by_key (grpc_c_context_t *context, const char *key)
+{
+    if (context) {
+	return grpc_get_metadata_by_array(context->gcc_initial_metadata, key);
+    }
+    return NULL;
+}
+
+/*
+ * Returns value for given key from trailing metadata array
+ */
+const char *
+grpc_c_get_trailing_metadata_by_key (grpc_c_context_t *context, 
+				     const char *key)
+{
+    if (context) {
+	return grpc_get_metadata_by_array(context->gcc_trailing_metadata, key);
+    }
+    return NULL;
+}
+
+/*
+ * Adds given key value pair to metadata array. Returns 0 on success and 1 on
+ * failure
+ */
+int 
+grpc_c_add_metadata (grpc_c_context_t *context, const char *key, 
+		     const char *value)
+{
+    return grpc_c_add_metadata_by_array(context->gcc_metadata, 
+					&context->gcc_metadata_storage, key, 
+					value);
+}
+
+/*
+ * Adds given key value pair to initial metadata array. Returns 0 on success
+ * and 1 on failure
+ */
+int 
+grpc_c_add_initial_metadata (grpc_c_context_t *context, const char *key, 
+			     const char *value)
+{
+    return grpc_c_add_metadata_by_array(context->gcc_initial_metadata, 
+					&context->gcc_initial_metadata_storage, 
+					key, value);
+}
+
+/*
+ * Adds given key value pair to trailing metadata array. Returns 0 on success
+ * and 1 on failure
+ */
+int 
+grpc_c_add_trailing_metadata (grpc_c_context_t *context, const char *key, 
+			      const char *value)
+{
+    return grpc_c_add_metadata_by_array(context->gcc_trailing_metadata, 
+					&context->gcc_trailing_metadata_storage, 
+					key, value);
 }

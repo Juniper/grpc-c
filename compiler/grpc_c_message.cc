@@ -215,7 +215,6 @@ GenerateHelperFunctionDefinitions(io::Printer* printer)
 		   "            grpc_slice_unref(slice);\n"
 		   "            if (buf == NULL) break;\n"
 		   "        }\n"
-		   "        if (buf == NULL) return NULL;\n"
 		   "        h = $lcclassname$__unpack(grpc_c_get_protobuf_c_allocator(context, &allocator), buf_len, (void *)buf);\n"
 		   "        free(buf);\n"
 		   "    }\n"
