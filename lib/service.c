@@ -220,6 +220,9 @@ gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
 	    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_event, 
 					     gpr_inf_future(GPR_CLOCK_REALTIME), 
 					     NULL);
+	    if (ev.type == GRPC_OP_COMPLETE) {
+		context->gcc_event->gce_refcount--;
+	    }
 	    gpr_mu_unlock(context->gcc_lock);
 
 	    if (ev.type == GRPC_OP_COMPLETE && ev.success) {
@@ -325,7 +328,6 @@ gc_write_ops (grpc_c_context_t *context, void *output, int batch)
 					     gpr_inf_past(GPR_CLOCK_REALTIME), 
 					     NULL);
 	}
-	gpr_mu_unlock(context->gcc_lock);
 
 	/*
 	 * If the op failed to complete, return failure. Otherwise handle the
@@ -337,9 +339,13 @@ gc_write_ops (grpc_c_context_t *context, void *output, int batch)
 	     * further writes
 	     */
 	    context->gcc_cancelled = 1;
+	    context->gcc_event->gce_refcount--;
+	    gpr_mu_unlock(context->gcc_lock);
 	    return GRPC_C_WRITE_FAIL;
 	} else if (ev.type == GRPC_OP_COMPLETE) {
 	    context->gcc_state = GRPC_C_WRITE_DATA_DONE;
+	    context->gcc_event->gce_refcount--;
+	    gpr_mu_unlock(context->gcc_lock);
 	    return GRPC_C_WRITE_OK;
 	} else if (ev.type == GRPC_QUEUE_TIMEOUT) {
 	    /*
@@ -347,8 +353,11 @@ gc_write_ops (grpc_c_context_t *context, void *output, int batch)
 	     * same and give him a chance to register for a callback that gets
 	     * called once this operation is finished
 	     */
+	    gpr_mu_unlock(context->gcc_lock);
 	    return GRPC_C_WRITE_PENDING;
 	} else {
+	    context->gcc_event->gce_refcount--;
+	    gpr_mu_unlock(context->gcc_lock);
 	    return GRPC_C_WRITE_FAIL;
 	}
     }
@@ -493,6 +502,7 @@ gc_register_grpc_method (grpc_c_server_t *server, struct grpc_c_method_t *np)
 	    gpr_log(GPR_ERROR, "Failed to register call: %d", e);
 	    return 1;
 	}
+	gcev->gce_refcount++;
     }
 
     return 0;

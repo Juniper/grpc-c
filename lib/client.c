@@ -484,6 +484,7 @@ gc_handle_client_connectivity_complete_op (grpc_c_client_t *client,
 	 */
 	if (client->gcc_retry_tag && client->gcc_connected == 0) {
 	    grpc_c_grpc_client_cancel_try_connect(client->gcc_retry_tag);
+	    client->gcc_retry_tag = NULL;
 	}
 
 	/*
