@@ -42,7 +42,7 @@ main (int argc, char **argv)
     /*
      * This will invoke a blocking RPC
      */
-    int status = foo__greeter__say_hello__sync(client, &h, &r, NULL, 0);
+    int status = foo__greeter__say_hello(client, NULL, &h, &r, NULL, 0);
     printf("Got back: %s\n", r->message);
     printf("Finished with %d\n", status);
 }

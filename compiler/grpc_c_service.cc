@@ -107,7 +107,7 @@ void GrpcCServiceGenerator::GenerateCallersDeclarations(io::Printer* printer)
   /* Methods array */
   printer->Print(vars_, "\nextern const char *$lcfullname$__methods[];\n");
 
-  printer->Print(vars_, "\nint $lcfullname$__service_init(grpc_c_server_t *server);\n");
+  printer->Print(vars_, "\nint $lcfullname$__service_init (grpc_c_server_t *server);\n");
 
   for (int i = 0; i < descriptor_->method_count(); i++) {
     const MethodDescriptor *method = descriptor_->method(i);
@@ -118,17 +118,25 @@ void GrpcCServiceGenerator::GenerateCallersDeclarations(io::Printer* printer)
     vars_["output_typename"] = c::FullNameToC(method->output_type()->full_name());
     vars_["padddddddddddddddddd"] = c::ConvertToSpaces(lcfullname + "__" + lcname);
 
-    /* Sync request only when client and server are non streaming */
+    /* For unary calls, we allow a blocking function */
     if (!method->client_streaming() && !method->server_streaming()) {
-	printer->Print(vars_,
-		       "\nint $lcfullname$__$method$__sync (grpc_c_client_t *client, $input_typename$ *input,\n"
-		       "    $padddddddddddddddddd$       $output_typename$ **output, grpc_c_status_t *status, long timeout);\n");
+	printer->Print(vars_, 
+		       "\nint $lcfullname$__$method$ (grpc_c_client_t *client, "
+		       "grpc_c_metadata_array_t *array, $input_typename$ *input, "
+		       "$output_typename$ **output, grpc_c_status_t *status, "
+		       "long timeout);\n");
     }
+    
+    /* Sync request */
+    printer->Print(vars_, 
+		   "\nint $lcfullname$__$method$__sync (grpc_c_client_t *client, "
+		   "grpc_c_metadata_array_t *array, grpc_c_context_t **context, $input_typename$ *input, long timeout);\n");
 
     /* Async request */
     printer->Print(vars_,
-                   "\nint $lcfullname$__$method$__async (grpc_c_client_t *client, $input_typename$ *input, void *tag, \n"
-		   "    $padddddddddddddddddd$           grpc_c_client_callback_t *cb);\n");
+                   "\nint $lcfullname$__$method$__async (grpc_c_client_t *client, "
+		   "void *tag, \n"
+		   "    $padddddddddddddddddd$       grpc_c_client_callback_t *cb);\n");
 
     /* callback */
     printer->Print(vars_,
@@ -272,29 +280,43 @@ void GrpcCServiceGenerator::GenerateCallersImplementations(io::Printer* printer)
     vars_["server_streaming"] = method->server_streaming() ? "1" : "0";
 
     /*
-     * If server or client is streaming, user will have to use async calls only
+     * For unary calls, we allow a blocking function
      */
-    if (!method->server_streaming() && !method->server_streaming()) {
+    if (!method->client_streaming() && !method->server_streaming()) {
 	printer->Print(vars_,
 		       "\nint \n"
-		       "$lcfullname$__$method$__sync (grpc_c_client_t *client, $input_typename$ *input,\n"
+		       "$lcfullname$__$method$ (grpc_c_client_t *client, grpc_c_metadata_array_t *array, $input_typename$ *input,\n"
 		       "$padddddddddddddddddd$       $output_typename$ **output, grpc_c_status_t *status, long timeout)\n"
 		       "{\n"
-		       "    return grpc_c_client_request_sync(client, $lcfullname$__methods[$index$], "
+		       "    return grpc_c_client_request_unary(client, array, $lcfullname$__methods[$index$], "
 		       "(void *)input, (void **)output, status, $client_streaming$, $server_streaming$, "
 		       "&$input_lower$_packer, &$input_lower$_unpacker, &$input_lower$_free, "
 		       "&$output_lower$_packer, &$output_lower$_unpacker, &$output_lower$_free, timeout);\n"
 		       "}\n");
     }
 
+    /*
+     * Sync and async functions for everyone
+     */
     printer->Print(vars_,
                    "\nint \n"
-		   "$lcfullname$__$method$__async (grpc_c_client_t *client, $input_typename$ *input,\n"
+		   "$lcfullname$__$method$__sync (grpc_c_client_t *client, grpc_c_metadata_array_t *array, grpc_c_context_t **context, $input_typename$ *input, long timeout)\n"
+		   "{\n"
+		   "    return grpc_c_client_request_sync(client, array, context, $lcfullname$__methods[$index$], input, "
+		   "$client_streaming$, $server_streaming$, "
+		   "&$input_lower$_packer, &$input_lower$_unpacker, "
+		   "&$input_lower$_free, &$output_lower$_packer,"
+		   "&$output_lower$_unpacker, &$output_lower$_free, timeout);\n"
+		   "}\n");
+
+    printer->Print(vars_,
+                   "\nint \n"
+		   "$lcfullname$__$method$__async (grpc_c_client_t *client, \n"
                    "$padddddddddddddddddd$        void *tag,\n"
 		   "$padddddddddddddddddd$        grpc_c_client_callback_t *cb)\n"
 		   "{\n"
 		   "    return grpc_c_client_request_async(client, $lcfullname$__methods[$index$], "
-		   "(void *)input, (void *)tag, $client_streaming$, $server_streaming$, "
+		   "(void *)tag, $client_streaming$, $server_streaming$, "
 		   "cb, &$input_lower$_packer, &$input_lower$_unpacker, "
 		   "&$input_lower$_free, &$output_lower$_packer,"
 		   "&$output_lower$_unpacker, &$output_lower$_free);\n"

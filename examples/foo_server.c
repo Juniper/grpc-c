@@ -28,7 +28,7 @@ foo__greeter__say_hello_cb (grpc_c_context_t *context)
      * Read incoming message into h
      */
     if (context->gcc_payload) {
-	context->gcc_reader->read(context, (void **)&h);
+	context->gcc_stream->read(context, (void **)&h, 0);
     }
 
     /*
@@ -42,22 +42,24 @@ foo__greeter__say_hello_cb (grpc_c_context_t *context)
     snprintf(buf, 1024, "hello, ");
     strcat(buf, h->name);
     r.message = buf;
-    context->gcc_reader->free(context, (void *)h);
 
     /*
      * Write reply back to the client
      */
-    if (!context->gcc_writer->write(context, &r, 0)) {
+    if (!context->gcc_stream->write(context, &r, 0)) {
         printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
     } else {
         printf("Failed to write\n");
         exit(1);
     }
 
+    grpc_c_status_t status;
+    status.gcs_code = 0;
+
     /*
      * Finish response for RPC
      */
-    if (context->gcc_writer->finish(context, 0, NULL)) {
+    if (context->gcc_stream->finish(context, &status)) {
         printf("Failed to write status\n");
         exit(1);
     }
