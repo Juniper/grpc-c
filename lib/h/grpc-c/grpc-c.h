@@ -87,6 +87,7 @@ typedef struct grpc_c_context_s grpc_c_context_t;
 typedef struct grpc_c_method_funcs_s grpc_c_method_funcs_t;
 typedef struct grpc_c_read_handler_s grpc_c_read_handler_t;
 typedef struct grpc_c_write_handler_s grpc_c_write_handler_t;
+typedef struct grpc_c_stream_handler_s grpc_c_stream_handler_t;
 typedef grpc_metadata_array grpc_c_metadata_array_t;
 
 /*
@@ -362,6 +363,9 @@ struct grpc_c_context_s {
     grpc_c_read_handler_t *gcc_reader;		/* Read handler that provides 
 						   read, finish and free 
 						   methods to user callback */
+    grpc_c_stream_handler_t *gcc_stream;	/* Handle to IO stream. Users 
+						   can use this handle to 
+						   read/write into the call */
     grpc_c_writer_resolve_callback_t *gcc_writer_resolve_cb;
 						/* Write callback that can be 
 						   called when a pending write 
@@ -377,6 +381,8 @@ struct grpc_c_context_s {
 						   call */
     grpc_c_event_t *gcc_event;			/* grpc-c event this context 
 						   belongs to */
+    grpc_c_event_t *gcc_read_event;		/* Event tag for read ops */
+    grpc_c_event_t *gcc_write_event;		/* Event tag for write ops */
     grpc_c_event_t *gcc_recv_close_event;	/* Recv close grpc-c event in 
 						   case of server context */
     union {					/* Union containing client or 
@@ -422,18 +428,28 @@ grpc_c_is_write_pending (grpc_c_context_t *context)
 }
 
 /*
- * Reader->read/finish, writer->write/finish, data free function signatures 
+ * Stream read, write and finish function signatures 
  */
-typedef int (grpc_c_read_t)(grpc_c_context_t *context, void **content);
+typedef int (grpc_c_read_t)(grpc_c_context_t *context, void **content, 
+			    long timeout);
 
 typedef int (grpc_c_write_t)(grpc_c_context_t *context, void *output, 
-			     int batch);
+			     long timeout);
 
 typedef int (grpc_c_read_finish_t)(grpc_c_context_t *context, 
 				   grpc_c_status_t *status);
 
 typedef int (grpc_c_write_finish_t)(grpc_c_context_t *context, int status, 
 				    const char *message);
+
+typedef int (grpc_c_stream_read_t)(grpc_c_context_t *context, void **content, 
+				   long timeout);
+
+typedef int (grpc_c_stream_write_t)(grpc_c_context_t *context, void *output, 
+				    long timeout);
+
+typedef int (grpc_c_stream_finish_t)(grpc_c_context_t *context, 
+				     grpc_c_status_t *status);
 
 typedef void (grpc_c_method_data_free_t)(grpc_c_context_t *context, void *buf);
 
@@ -453,6 +469,15 @@ struct grpc_c_write_handler_s {
     grpc_c_write_t *write;
     grpc_c_write_finish_t *finish; 
     grpc_c_method_data_free_t *free;
+};
+
+/*
+ * Stream handler
+ */
+struct grpc_c_stream_handler_s {
+    grpc_c_stream_read_t *read;
+    grpc_c_stream_write_t *write;
+    grpc_c_stream_finish_t *finish;
 };
 
 /*
@@ -681,14 +706,23 @@ const char *grpc_c_get_client_id (grpc_c_context_t *context);
 int grpc_c_client_request_unary (grpc_c_client_t *client, 
 				 grpc_c_metadata_array_t *array, 
 				 const char *method, 
-				 void *input, void **output);
-
+				 void *input, void **output, 
+				 grpc_c_status_t *status, 
+				 int client_streaming, int server_streaming, 
+				 grpc_c_method_data_pack_t *input_packer, 
+				 grpc_c_method_data_unpack_t *input_unpacker, 
+				 grpc_c_method_data_free_t *input_free, 
+				 grpc_c_method_data_pack_t *output_packer, 
+				 grpc_c_method_data_unpack_t *output_unpacker, 
+				 grpc_c_method_data_free_t *output_free, 
+				 long timeout);
 /*
  * Main function for non-streaming/synchronous RPC call from client
  */
-int grpc_c_client_request_sync (grpc_c_client_t *client, const char *method, 
-				void *input, void **output, 
-				grpc_c_status_t *status, int client_streaming, 
+int grpc_c_client_request_sync (grpc_c_client_t *client, 
+				grpc_c_metadata_array_t *mdarray, 
+				grpc_c_context_t **context, const char *method, 
+				void *inpupt, int client_streaming, 
 				int server_streaming, 
 				grpc_c_method_data_pack_t *input_packer, 
 				grpc_c_method_data_unpack_t *input_unpacker, 
@@ -701,9 +735,9 @@ int grpc_c_client_request_sync (grpc_c_client_t *client, const char *method,
 /*
  * Main function for asynchronous/streaming RPC call from client
  */
-int grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
-				 void *input, void *tag, 
-				 int client_streaming, int server_streaming, 
+int grpc_c_client_request_async (grpc_c_client_t *client, const char *method, 
+				 void *tag, int client_streaming, 
+				 int server_streaming, 
 				 grpc_c_client_callback_t *cb, 
 				 grpc_c_method_data_pack_t *input_packer, 
 				 grpc_c_method_data_unpack_t *input_unpacker, 

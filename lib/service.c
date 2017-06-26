@@ -123,15 +123,34 @@ grpc_c_register_method (grpc_c_server_t *server, const char *method,
 }
 
 /*
- * Reads data from client into content and returns 0 if success. 
- * Returns 1 if there is no more data or a failure
+ * If we have received data into gcc_payload, wput that data into content and
+ * return 0 as success. If data is not readily available, we put in a batch
+ * request for message with the specified timeout. Returns GRPC_C_OK on
+ * success, GRPC_C_FAIL on failure and GRPC_C_TIMEOUT on operation timeout.
+ * When a new call to read is made and previous read is still pending, it will
+ * return the data from previous call or waits for that read to finish
  */
 static int
-gc_read_ops (grpc_c_context_t *context, void **content)
+gc_stream_read (grpc_c_context_t *context, void **content, long timeout)
 {
+    grpc_event ev;
     int op_count = context->gcc_op_count;
     int method_id = context->gcc_method->gcm_method_id;
+    gpr_timespec deadline;
+    
+    /*
+     * Figure out deadline to finish this operation. A timeout of -1 will
+     * block till we get data back or the operation fails before that
+     */
+    if (timeout < 0) {
+	deadline = gpr_inf_future(GPR_CLOCK_REALTIME);
+    } else if (timeout == 0) {
+	deadline = gpr_time_0(GPR_CLOCK_REALTIME);
+    } else {
+	deadline = gpr_time_from_millis(timeout, GPR_CLOCK_REALTIME);
+    }
 
+    *content = NULL;
     /*
      * Check if we have pending optional payload
      */
@@ -141,24 +160,51 @@ gc_read_ops (grpc_c_context_t *context, void **content)
 	 */
 	if (grpc_c_ops_alloc(context, 1)) return 1;
 
-	context->gcc_ops[op_count].op = GRPC_OP_RECV_MESSAGE;
-	context->gcc_ops[op_count].data.recv_message = &context->gcc_payload;
-
 	gpr_mu_lock(context->gcc_lock);
-	context->gcc_event->gce_type = GRPC_C_EVENT_READ;
-	context->gcc_event->gce_refcount++;
-	grpc_call_error e =  grpc_call_start_batch(context->gcc_call, 
-						   context->gcc_ops, 
-						   1, context->gcc_event, 
-						   NULL);
-	gpr_mu_unlock(context->gcc_lock);
 
-	if (e != GRPC_CALL_OK) {
-	    gpr_log(GPR_ERROR, "Failed to finish read ops batch");
-	    return 1;
+	/*
+	 * If we have already requested for data and have not received yet,
+	 * let us try to get the previous batch ops again. Otherwise put in a
+	 * new batch ops for new set of data
+	 */
+	if (context->gcc_read_event->gce_refcount == 0) {
+	    context->gcc_ops[op_count].op = GRPC_OP_RECV_MESSAGE;
+	    context->gcc_ops[op_count].data.recv_message 
+		= &context->gcc_payload;
+
+	    context->gcc_read_event->gce_type = GRPC_C_EVENT_READ;
+	    context->gcc_read_event->gce_refcount++;
+	    grpc_call_error e =  grpc_call_start_batch(context->gcc_call, 
+						       context->gcc_ops, 1, 
+						       context->gcc_read_event, 
+						       NULL);
+
+	    if (e != GRPC_CALL_OK) {
+		context->gcc_read_event->gce_refcount--;
+		gpr_mu_unlock(context->gcc_lock);
+		gpr_log(GPR_ERROR, "Failed to finish read ops batch");
+		return 1;
+	    }
 	}
 
+	ev = grpc_completion_queue_pluck(context->gcc_cq, 
+					 context->gcc_read_event, deadline, 
+					 NULL);
+
+	if (ev.success == 0 || (ev.type != GRPC_OP_COMPLETE 
+				&& ev.type != GRPC_QUEUE_TIMEOUT)) {
+	    gpr_log(GPR_ERROR, "Failed to pluck read op");
+	    context->gcc_read_event->gce_refcount--;
+	    gpr_mu_unlock(context->gcc_lock);
+	    return GRPC_C_FAIL;
+	} else if (ev.type == GRPC_QUEUE_TIMEOUT) {
+	    gpr_log(GPR_DEBUG, "Read op queue timedout");
+	    gpr_mu_unlock(context->gcc_lock);
+	    return GRPC_C_TIMEOUT;
+	}
 	context->gcc_op_count = 0;
+	context->gcc_read_event->gce_refcount--;
+	gpr_mu_unlock(context->gcc_lock);
     }
 
     /*
@@ -170,9 +216,9 @@ gc_read_ops (grpc_c_context_t *context, void **content)
     if (context->gcc_payload != NULL) {
 	grpc_byte_buffer_destroy(context->gcc_payload);
 	context->gcc_payload = NULL;
-	return 0;
+	return GRPC_C_OK;
     } else {
-	return 1;
+	return GRPC_C_FAIL;
     }
 }
 
@@ -250,20 +296,23 @@ grpc_c_send_initial_metadata (grpc_c_context_t *context)
 }
 
 /*
- * Writes the data given in output. Returns 0 if success. 1 if there is an
- * error
+ * Writes the data given in output. Tries to finish writing in given timeout.
+ * If timeout is -1, it blocks till write is done. If there is already a
+ * previous write that is pending, we do not allow any new writes till the
+ * previous write is done
  */
 static int
-gc_write_ops (grpc_c_context_t *context, void *output, int batch)
+gc_stream_write (grpc_c_context_t *context, void *output, long timeout)
 {
     int op_count = context->gcc_op_count;
     int method_id = context->gcc_method->gcm_method_id;
+    gpr_timespec deadline;
     grpc_event ev;
 
     /*
      * If there is a pending write, return early
      */
-    if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
+    if (context->gcc_write_event->gce_refcount > 0) {
 	return GRPC_C_WRITE_PENDING;
     }
 
@@ -272,7 +321,7 @@ gc_write_ops (grpc_c_context_t *context, void *output, int batch)
      */
     if (gc_send_initial_metadata_internal(context, 0)) {
 	gpr_log(GPR_ERROR, "Failed to send initial metadata");
-	return 1;
+	return GRPC_C_FAIL;
     }
 
     /*
@@ -298,68 +347,67 @@ gc_write_ops (grpc_c_context_t *context, void *output, int batch)
 	= context->gcc_ops_payload[op_count];
 
     context->gcc_op_count++;
+    
+    /*
+     * Figure out deadline to finish this operation. A timeout of -1 will
+     * block till we get data back or the operation fails before that
+     */
+    if (timeout < 0) {
+	deadline = gpr_inf_future(GPR_CLOCK_REALTIME);
+    } else if (timeout == 0) {
+	deadline = gpr_time_0(GPR_CLOCK_REALTIME);
+    } else {
+	deadline = gpr_time_from_millis(timeout, GPR_CLOCK_REALTIME);
+    }
 
-    if (batch == 0) {
-	gpr_mu_lock(context->gcc_lock);
-	context->gcc_state = GRPC_C_WRITE_DATA_START;
-	context->gcc_event->gce_type = GRPC_C_EVENT_WRITE;
-	context->gcc_event->gce_refcount++;
-	grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
-						  context->gcc_ops,
-						  context->gcc_op_count, 
-						  context->gcc_event, NULL);
-	if (e == GRPC_CALL_OK) {
-	    context->gcc_op_count = 0;
-	} else {
-	    gpr_log(GPR_ERROR, "Failed to finish batch operations to write data"
-		    " - %d", e);
-	    gpr_mu_unlock(context->gcc_lock);
-	    return GRPC_C_WRITE_FAIL;
-	}
+    gpr_mu_lock(context->gcc_lock);
+    context->gcc_state = GRPC_C_WRITE_DATA_START;
+    context->gcc_write_event->gce_type = GRPC_C_EVENT_WRITE;
+    context->gcc_write_event->gce_refcount++;
+    grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
+					      context->gcc_ops, 
+					      context->gcc_op_count, 
+					      context->gcc_write_event, NULL);
+    context->gcc_op_count = 0;
+    if (e != GRPC_CALL_OK) {
+	gpr_log(GPR_ERROR, "Failed to finish batch operations to write data"
+		" - %d", e);
+	gpr_mu_unlock(context->gcc_lock);
+	return GRPC_C_WRITE_FAIL;
+    }
 
-	if (grpc_c_get_thread_pool()) {
-	    ev = grpc_completion_queue_pluck(context->gcc_cq, 
-					     context->gcc_event, 
-					     gpr_inf_future(GPR_CLOCK_REALTIME), 
-					     NULL);
-	} else {
-	    ev = grpc_completion_queue_pluck(context->gcc_cq, 
-					     context->gcc_event, 
-					     gpr_inf_past(GPR_CLOCK_REALTIME), 
-					     NULL);
-	}
+    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_write_event, 
+				     deadline, NULL);
 
+    /*
+     * If the op failed to complete, return failure. Otherwise handle the event
+     */
+    if (ev.success == 0 && ev.type != GRPC_QUEUE_TIMEOUT) {
 	/*
-	 * If the op failed to complete, return failure. Otherwise handle the
-	 * event
+	 * If write has failed, mark the cancelled flag so server can stop 
+	 * further writes
 	 */
-	if (ev.success == 0 && ev.type != GRPC_QUEUE_TIMEOUT) {
-	    /*
-	     * If write has failed, mark the cancelled flag so server can stop
-	     * further writes
-	     */
-	    context->gcc_cancelled = 1;
-	    context->gcc_event->gce_refcount--;
-	    gpr_mu_unlock(context->gcc_lock);
-	    return GRPC_C_WRITE_FAIL;
-	} else if (ev.type == GRPC_OP_COMPLETE) {
-	    context->gcc_state = GRPC_C_WRITE_DATA_DONE;
-	    context->gcc_event->gce_refcount--;
-	    gpr_mu_unlock(context->gcc_lock);
-	    return GRPC_C_WRITE_OK;
-	} else if (ev.type == GRPC_QUEUE_TIMEOUT) {
-	    /*
-	     * Our opertion is still pending. We should tell user about the
-	     * same and give him a chance to register for a callback that gets
-	     * called once this operation is finished
-	     */
-	    gpr_mu_unlock(context->gcc_lock);
-	    return GRPC_C_WRITE_PENDING;
-	} else {
-	    context->gcc_event->gce_refcount--;
-	    gpr_mu_unlock(context->gcc_lock);
-	    return GRPC_C_WRITE_FAIL;
-	}
+	context->gcc_cancelled = 1;
+	context->gcc_write_event->gce_refcount--;
+	gpr_mu_unlock(context->gcc_lock);
+	return GRPC_C_WRITE_FAIL;
+    } else if (ev.type == GRPC_OP_COMPLETE) {
+	context->gcc_state = GRPC_C_WRITE_DATA_DONE;
+	context->gcc_write_event->gce_refcount--;
+	gpr_mu_unlock(context->gcc_lock);
+	return GRPC_C_WRITE_OK;
+    } else if (ev.type == GRPC_QUEUE_TIMEOUT) {
+	/*
+	 * Our opertion is still pending. We should tell user about the same 
+	 * and give him a chance to register for a callback that gets called 
+	 * once this operation is finished
+	 */
+	gpr_mu_unlock(context->gcc_lock);
+	return GRPC_C_WRITE_PENDING;
+    } else {
+	context->gcc_write_event->gce_refcount--;
+	gpr_mu_unlock(context->gcc_lock);
+	return GRPC_C_WRITE_FAIL;
     }
 
     return GRPC_C_WRITE_OK;
@@ -381,8 +429,8 @@ gc_read_ops_finish (grpc_c_context_t *context, grpc_c_status_t *status UNUSED)
  * Fills context with ops to send data and status.
  */
 static int
-gc_write_ops_finish_internal (grpc_c_context_t *context, int status, 
-			      const char *msg)
+gc_stream_finish_internal (grpc_c_context_t *context, int status, 
+			   const char *msg)
 {
     int op_count = context->gcc_op_count;
 
@@ -444,9 +492,10 @@ gc_write_ops_finish_internal (grpc_c_context_t *context, int status,
  * 0 on success. 1 on failure
  */
 static int
-gc_write_ops_finish (grpc_c_context_t *context, int status, const char *msg)
+gc_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 {
-    return gc_write_ops_finish_internal(context, status, msg);
+    return gc_stream_finish_internal(context, status->gcs_code, 
+				     status->gcs_message);
 }
 
 static int
@@ -544,31 +593,43 @@ gc_prepare_server_callback (grpc_c_context_t *context)
     struct grpc_c_method_t *method = context->gcc_method;
     int method_id = method->gcm_method_id;
 
-    grpc_c_read_handler_t *read_handler = malloc(sizeof(grpc_c_read_handler_t));
-    grpc_c_write_handler_t *write_handler 
-	= malloc(sizeof(grpc_c_write_handler_t));
-
-    context->gcc_reader = read_handler;
-    context->gcc_writer = write_handler;
-
-    if (read_handler == NULL || write_handler == NULL) {
-	gpr_log(GPR_ERROR, "Failed to allocate memory for read/write handlers");
+    grpc_c_stream_handler_t *stream_handler 
+	= malloc(sizeof(grpc_c_stream_handler_t));
+    if (stream_handler == NULL) {
+	gpr_log(GPR_ERROR, "Failed to allocate memory for stream handler");
 	grpc_c_context_free(context);
 	return 1;
     }
 
-    read_handler->read = &gc_read_ops;
-    read_handler->finish = &gc_read_ops_finish;
-    read_handler->free = server->gcs_method_funcs[method_id].gcmf_input_free;
+    context->gcc_stream = stream_handler;
 
-    write_handler->write = &gc_write_ops;
-    write_handler->finish = &gc_write_ops_finish;
-    write_handler->free = server->gcs_method_funcs[method_id].gcmf_output_free;
+    stream_handler->read = &gc_stream_read;
+    stream_handler->write = &gc_stream_write;
+    stream_handler->finish = &gc_stream_finish;
 
     /*
      * Reregister the method so next call to this RPC can be caught
      */
     rc = gc_reregister_method(server, method_id);
+
+    /*
+     * Allocate memory for read and write events
+     */
+    context->gcc_read_event = malloc(sizeof(grpc_c_event_t));
+    if (context->gcc_read_event == NULL) {
+	gpr_log(GPR_ERROR, "Failed to allocate memory for read event");
+	grpc_c_context_free(context);
+	return 1;
+    }
+    bzero(context->gcc_read_event, sizeof(grpc_c_event_t));
+
+    context->gcc_write_event = malloc(sizeof(grpc_c_event_t));
+    if (context->gcc_write_event == NULL) {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "Failed to allocate memory for write event");
+	return 1;
+    }
+    bzero(context->gcc_write_event, sizeof(grpc_c_event_t));
 
     /*
      * Start a batch operation so we know when the call is cancelled either
@@ -735,8 +796,8 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 		gpr_cv_signal(&server->gcs_shutdown_cv);
 	    }
 	} else {
-	    gc_write_ops_finish_internal(context, context->gcc_status, 
-					 NULL);
+	    gc_stream_finish_internal(context, context->gcc_status, 
+				      NULL);
 	}
     } else if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
 	/*

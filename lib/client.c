@@ -297,7 +297,7 @@ gc_client_request_status (grpc_c_context_t *context)
  * next message so data is available when the client calls reader->read
  */
 static int
-gc_client_reader_read (grpc_c_context_t *context, void **output)
+gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
 {
     /*
      * Decode the received data
@@ -331,12 +331,21 @@ gc_client_reader_read (grpc_c_context_t *context, void **output)
 }
 
 /*
+ * Write function for client
+ */
+static int
+gc_stream_write (grpc_c_context_t *context, void *output, long timeout)
+{
+    return 0;
+}
+
+/*
  * Reader finish callback. Returns the status received into
  * context->gcc_status from previous call to grpc_c_client_request_status() 
  * when server sent NULL marking end of output
  */
 static int
-gc_client_reader_finish (grpc_c_context_t *context, grpc_c_status_t *status)
+gc_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 {
     if (status != NULL) {
 	status->gcs_code = context->gcc_status;
@@ -359,27 +368,27 @@ gc_client_reader_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 static int
 gc_prepare_client_callback (grpc_c_context_t *context)
 {
-    grpc_c_read_handler_t *read_handler;
+    grpc_c_stream_handler_t *stream_handler;
     
     if (context == NULL) {
 	return 0;
     }
 
-    if (context->gcc_reader == NULL) {
-	read_handler = malloc(sizeof(grpc_c_read_handler_t));
+    if (context->gcc_stream == NULL) {
+	stream_handler = malloc(sizeof(grpc_c_stream_handler_t));
     } else {
-	read_handler = context->gcc_reader;
+	stream_handler = context->gcc_stream;
     }
 
-    if (read_handler == NULL) {
+    if (stream_handler == NULL) {
 	return 0;
     }
 
-    read_handler->read = &gc_client_reader_read;
-    read_handler->finish = &gc_client_reader_finish;
-    read_handler->free = context->gcc_method_funcs->gcmf_output_free;
+    stream_handler->read = &gc_stream_read;
+    stream_handler->write = &gc_stream_write;
+    stream_handler->finish = &gc_stream_finish;
 
-    context->gcc_reader = read_handler;
+    context->gcc_stream = stream_handler;
 
     /*
      * Invoke callback with read handler if we have data so client can read.
@@ -645,8 +654,9 @@ gc_handle_client_event (grpc_completion_queue *cq)
  * initial metadata, data and request for data from server
  */
 static grpc_c_context_t *
-gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input, 
-		       void *tag, int client_streaming, 
+gc_client_prepare_ops (grpc_c_client_t *client, 
+		       grpc_c_metadata_array_t *mdarray, int sync UNUSED, 
+		       void *input, void *tag, int client_streaming, 
 		       int server_streaming, 
 		       grpc_c_client_callback_t *cb, 
 		       grpc_c_method_data_pack_t *input_packer, 
@@ -656,6 +666,7 @@ gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input,
 		       grpc_c_method_data_unpack_t *output_unpacker, 
 		       grpc_c_method_data_free_t *output_free)
 {
+    int mdcount = 0;
     grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context");
@@ -709,15 +720,28 @@ gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input,
     if (grpc_c_add_metadata(context, "client-id", 
 			    client->gcc_id ? client->gcc_id : "")) {
 	grpc_c_context_free(context);
-	gpr_log(GPR_ERROR, "Failed to add metadata");
+	gpr_log(GPR_ERROR, "Failed to add client-id to metadata");
 	return NULL;
+    }
+    
+    /*
+     * Stuff given metadata into the call
+     */
+    if (mdarray != NULL) {
+	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
+	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
+				    mdarray->metadata[mdcount].value)) {
+		gpr_log(GPR_ERROR, "Failed to add metadata");
+		return NULL;
+	    }
+	}
     }
 
     /*
      * Send initial metadata with client-id
      */
     context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
-    context->gcc_ops[op_count].data.send_initial_metadata.count = 1;
+    context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
     context->gcc_ops[op_count].data.send_initial_metadata.metadata 
 	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
     op_count++;
@@ -797,9 +821,9 @@ gc_client_prepare_ops (grpc_c_client_t *client, int sync UNUSED, void *input,
  * these functions.
  */
 int
-grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
-			     void *input, void *tag, 
-			     int client_streaming, int server_streaming, 
+grpc_c_client_request_async (grpc_c_client_t *client, const char *method, 
+			     void *tag, int client_streaming, 
+			     int server_streaming, 
 			     grpc_c_client_callback_t *cb, 
 			     grpc_c_method_data_pack_t *input_packer, 
 			     grpc_c_method_data_unpack_t *input_unpacker, 
@@ -809,8 +833,8 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 			     grpc_c_method_data_free_t *output_free)
 {
     grpc_call_error e;
-    grpc_c_context_t *context = gc_client_prepare_ops(client, 0, input, tag, 
-						      client_streaming, 
+    grpc_c_context_t *context = gc_client_prepare_ops(client, NULL, 0, NULL, 
+						      tag, client_streaming, 
 						      server_streaming, 
 						      cb, input_packer, 
 						      input_unpacker, 
@@ -848,27 +872,28 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 }
 
 /*
- * Main function that handles sync/non-streaming RPC calls. Returns 1 on error
- * and 0 on success. Client is expected to check the return status of the
- * autogenerated functions which propagate return value of this function
+ * Unary function
  */
 int
-grpc_c_client_request_sync (grpc_c_client_t *client, const char *method, 
-			    void *input, void **output, grpc_c_status_t *status, 
-			    int client_streaming, int server_streaming, 
-			    grpc_c_method_data_pack_t *input_packer, 
-			    grpc_c_method_data_unpack_t *input_unpacker, 
-			    grpc_c_method_data_free_t *input_free, 
-			    grpc_c_method_data_pack_t *output_packer, 
-			    grpc_c_method_data_unpack_t *output_unpacker, 
-			    grpc_c_method_data_free_t *output_free, 
-			    long timeout)
+grpc_c_client_request_unary (grpc_c_client_t *client, 
+			     grpc_c_metadata_array_t *mdarray, 
+			     const char *method, void *input, void **output, 
+			     grpc_c_status_t *status, int client_streaming, 
+			     int server_streaming, 
+			     grpc_c_method_data_pack_t *input_packer, 
+			     grpc_c_method_data_unpack_t *input_unpacker, 
+			     grpc_c_method_data_free_t *input_free, 
+			     grpc_c_method_data_pack_t *output_packer, 
+			     grpc_c_method_data_unpack_t *output_unpacker, 
+			     grpc_c_method_data_free_t *output_free, 
+			     long timeout)
 {
     int rc = GRPC_C_OK;
     grpc_call_error e;
     grpc_event ev;
     gpr_timespec tout;
-    grpc_c_context_t *context = gc_client_prepare_ops(client, 1, input, NULL, 
+    grpc_c_context_t *context = gc_client_prepare_ops(client, mdarray, 1, 
+						      input, NULL, 
 						      client_streaming, 
 						      server_streaming, 
 						      NULL, input_packer, 
@@ -978,6 +1003,110 @@ cleanup:
     /*
      * If we are done executing all the callbacks, finish shutdown
      */
+    if (grpc_c_get_thread_pool()) {
+	if (client->gcc_running_cb == 0 && client->gcc_shutdown) {
+	    gpr_cv_signal(&client->gcc_shutdown_cv);
+	}
+
+        gpr_cv_signal(&client->gcc_callback_cv);
+    }
+
+    return rc;
+}
+
+/*
+ * Main function that handles sync/non-streaming RPC calls. Returns 1 on error
+ * and 0 on success. Client is expected to check the return status of the
+ * autogenerated functions which propagate return value of this function
+ */
+int
+grpc_c_client_request_sync (grpc_c_client_t *client, 
+			    grpc_c_metadata_array_t *mdarray, 
+			    grpc_c_context_t **pcontext, const char *method, 
+			    void *input, int client_streaming, 
+			    int server_streaming, 
+			    grpc_c_method_data_pack_t *input_packer, 
+			    grpc_c_method_data_unpack_t *input_unpacker, 
+			    grpc_c_method_data_free_t *input_free, 
+			    grpc_c_method_data_pack_t *output_packer, 
+			    grpc_c_method_data_unpack_t *output_unpacker, 
+			    grpc_c_method_data_free_t *output_free, 
+			    long timeout)
+{
+    int rc = GRPC_C_OK;
+    grpc_call_error e;
+    grpc_event ev;
+    gpr_timespec tout;
+    grpc_c_context_t *context;
+
+    if (context == NULL) {
+	gpr_log(GPR_ERROR, "Invalid context pointer provided");
+	rc = GRPC_C_FAIL;
+	goto cleanup;
+    }
+
+    context = gc_client_prepare_ops(client, mdarray, 1, input, NULL, 
+				    client_streaming, server_streaming, NULL, 
+				    input_packer, input_unpacker, input_free, 
+				    output_packer, output_unpacker, 
+				    output_free); 
+    if (context == NULL) {
+	gpr_log(GPR_ERROR, "Failed to create context with sync operations");
+	rc = GRPC_C_FAIL;
+	goto cleanup;
+    }
+
+    *pcontext = context;
+
+    context->gcc_call = grpc_channel_create_call(client->gcc_channel, 
+						 NULL, 0, 
+						 context->gcc_cq, method, 
+						 client->gcc_host, 
+						 gpr_inf_future(GPR_CLOCK_REALTIME), 
+						 NULL);
+
+    e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
+			      context->gcc_op_count, context, NULL);
+
+    if (e == GRPC_CALL_OK) {
+	context->gcc_op_count = 0;
+    } else {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "Failed to finish batch operations on sync call: "
+		"%d", e);
+	rc = GRPC_C_FAIL;
+	goto cleanup;
+    }
+
+    /*
+     * In sync operations, we block till the event we are interested in is
+     * available. If timeout is zero, then we block till call is executed
+     */
+    if (timeout == 0) {
+	tout = gpr_inf_future(GPR_CLOCK_REALTIME);
+    } else {
+	tout = gpr_time_from_seconds(timeout, GPR_CLOCK_REALTIME);
+    }
+
+    ev = grpc_completion_queue_pluck(context->gcc_cq, context, tout, NULL);
+
+    /*
+     * If our sync call has timedout, cancel the call and return timedout. If
+     * cancel fails, mark that as failed call
+     */
+    if (ev.type == GRPC_QUEUE_TIMEOUT 
+	&& grpc_call_cancel(context->gcc_call, NULL) == GRPC_CALL_OK) {
+	gpr_log(GPR_ERROR, "Sync call timedout");
+	rc = GRPC_C_TIMEOUT;
+	goto cleanup;
+    } else if (ev.type != GRPC_OP_COMPLETE || ev.success == 0) {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "Failed to pluck sync event");
+	rc = GRPC_C_FAIL;
+	goto cleanup;
+    }
+
+cleanup:
     if (grpc_c_get_thread_pool()) {
 	if (client->gcc_running_cb == 0 && client->gcc_shutdown) {
 	    gpr_cv_signal(&client->gcc_shutdown_cv);
