@@ -2,7 +2,7 @@
 
 C implementation of [gRPC](http://www.grpc.io/) layered of top of core libgrpc. 
 
-##Build
+## Build
 
 ```sh
 autoreconf --install
@@ -13,7 +13,8 @@ make
 sudo make install
 ```
 
-##Examples
+
+## Examples
 
 ```sh
 cd build/examples
@@ -28,11 +29,11 @@ sudo ./foo_server test
 sudo ./foo_client test
 ```
 
-##Status
+## Status
 
 Pre-alpha. Under active development. APIs may change.
 
-##Dependencies
+## Dependencies
 
 - gRPC master
 - protobuf 3.0
