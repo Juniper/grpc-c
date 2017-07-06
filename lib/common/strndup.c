@@ -9,9 +9,6 @@
 #include "config.h"
 #include <common/strextra.h>
 
-/* This symbol prevents a warning when HAVE_STRNDUP is defined */
-char libjuise_strndup_marker;
-
 #ifndef HAVE_STRNDUP
 /*
  * strndup(): strdup() meets strncat(); return a duplicate string

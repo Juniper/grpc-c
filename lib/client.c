@@ -12,6 +12,7 @@
 #include "context.h"
 #include "thread_pool.h"
 #include "hooks.h"
+#include "stream_ops.h"
 
 /*
  * Forward declaration
@@ -292,73 +293,67 @@ gc_client_request_status (grpc_c_context_t *context)
 }
 
 /*
- * Read callback for the client. Decodes the data received into gcc_payload
- * from previous call to gc_client_request_data(). Puts in a request to get
- * next message so data is available when the client calls reader->read
- */
-static int
-gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
+ * Internal function to send available initial metadata to client
+static int 
+gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
 {
-    /*
-     * Decode the received data
-     */
-    if (context->gcc_payload && 
-	grpc_byte_buffer_length((grpc_byte_buffer *)context->gcc_payload) > 0) {
-	*output = context->gcc_method_funcs->gcmf_output_unpacker(context, 
-							context->gcc_payload);
+    grpc_event ev;
+    grpc_call_error e;
 
-	/*
-	 * Free byte buffer
-	 */
-	grpc_byte_buffer_destroy(context->gcc_payload);
-	context->gcc_payload = NULL;
+    if (context->gcc_meta_sent == 0) {
+	if (grpc_c_ops_alloc(context, 1)) return 1;
 
-	/*
-	 * If server is streaming, request for next stream of message
-	 */
-	if (context->gcc_method->gcm_server_streaming) {
-	    return gc_client_request_data(context);
+	context->gcc_ops[context->gcc_op_count].op 
+	    = GRPC_OP_SEND_INITIAL_METADATA;
+	context->gcc_ops[context->gcc_op_count]
+	    .data.send_initial_metadata.count 
+	    = context->gcc_initial_metadata->count;
+
+	if (context->gcc_initial_metadata->count > 0) {
+	    context->gcc_ops[context->gcc_op_count].data
+		.send_initial_metadata.metadata 
+		= context->gcc_initial_metadata->metadata;
 	}
-    } else {
-	/*
-	 * If payload is NULL or we have invalid data, return NULL to the
-	 * client so it can request for status
-	 */
-	*output = NULL;
-    }
+	context->gcc_op_count++;
 
-    return 0;
-}
+	if (send) {
+	    gpr_mu_lock(context->gcc_lock);
+	    context->gcc_event->gce_type = GRPC_C_EVENT_METADATA;
+	    context->gcc_event->gce_refcount++;
+	    e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
+				      context->gcc_op_count, context->gcc_event, 
+				      NULL);
+	    if (e == GRPC_CALL_OK) {
+		context->gcc_op_count = 0;
+	    } else {
+		gpr_log(GPR_ERROR, "Failed to finish batch operations to "
+			"send initial metadata - %d", e);
+		gpr_mu_unlock(context->gcc_lock);
+		return 1;
+	    }
 
-/*
- * Write function for client
- */
-static int
-gc_stream_write (grpc_c_context_t *context, void *output, long timeout)
-{
-    return 0;
-}
+	    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_event, 
+					     gpr_inf_future(GPR_CLOCK_REALTIME), 
+					     NULL);
+	    if (ev.type == GRPC_OP_COMPLETE) {
+		context->gcc_event->gce_refcount--;
+	    }
+	    gpr_mu_unlock(context->gcc_lock);
 
-/*
- * Reader finish callback. Returns the status received into
- * context->gcc_status from previous call to grpc_c_client_request_status() 
- * when server sent NULL marking end of output
- */
-static int
-gc_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
-{
-    if (status != NULL) {
-	status->gcs_code = context->gcc_status;
-
-	if (context->gcc_status_details_capacity > 0) {
-	    strlcpy(status->gcs_message, context->gcc_status_details, 
-		    sizeof(status->gcs_message));
+	    if (ev.type == GRPC_OP_COMPLETE && ev.success) {
+		context->gcc_op_count = 0;
+		context->gcc_meta_sent = 1;
+		return 0;
+	    } else {
+		return 1;
+	    }
 	} else {
-	    status->gcs_message[0] = '\0';
+	    context->gcc_meta_sent = 1;
 	}
     }
-    return context->gcc_status;
+    return 0;
 }
+ */
 
 /*
  * Prepares context with read handler and calls the client callback. Returns 0
@@ -386,7 +381,8 @@ gc_prepare_client_callback (grpc_c_context_t *context)
 
     stream_handler->read = &gc_stream_read;
     stream_handler->write = &gc_stream_write;
-    stream_handler->finish = &gc_stream_finish;
+    stream_handler->write_done = &gc_client_stream_write_done;
+    stream_handler->finish = &gc_client_stream_finish;
 
     context->gcc_stream = stream_handler;
 
@@ -650,21 +646,288 @@ gc_handle_client_event (grpc_completion_queue *cq)
 }
 
 /*
+ * Returns a context object with filled in ops for async call
+ */
+static grpc_c_context_t *
+gc_client_prepare_async_ops (grpc_c_client_t *client, 
+			     grpc_c_metadata_array_t *mdarray, int sync, 
+			     void *input, void *tag, int client_streaming, 
+			     int server_streaming, 
+			     grpc_c_client_callback_t *cb, 
+			     grpc_c_method_data_pack_t *input_packer, 
+			     grpc_c_method_data_unpack_t *input_unpacker, 
+			     grpc_c_method_data_free_t *input_free, 
+			     grpc_c_method_data_pack_t *output_packer, 
+			     grpc_c_method_data_unpack_t *output_unpacker, 
+			     grpc_c_method_data_free_t *output_free)
+{
+    int mdcount = 0;
+    grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
+    if (context == NULL) {
+	gpr_log(GPR_ERROR, "Failed to create context");
+	return NULL;
+    }
+
+    context->gcc_method = malloc(sizeof(struct grpc_c_method_t));
+    if (context->gcc_method == NULL) {
+	grpc_c_context_free(context);
+	return NULL;
+    }
+    bzero(context->gcc_method, sizeof(struct grpc_c_method_t));
+
+    context->gcc_state = GRPC_C_CLIENT_START;
+    context->gcc_cq = grpc_completion_queue_create(NULL);
+    grpc_c_grpc_set_cq_callback(context->gcc_cq, gc_handle_client_event);
+
+    int op_count = context->gcc_op_count;
+
+    /*
+     * Save packer, unpacker, free functions for input/output and client
+     * callback, client provided tag
+     */
+    context->gcc_method_funcs->gcmf_handler.gcmfh_client = cb;
+    context->gcc_method->gcm_client_streaming = client_streaming;
+    context->gcc_method->gcm_server_streaming = server_streaming;
+    context->gcc_method_funcs->gcmf_input_packer = input_packer;
+    context->gcc_method_funcs->gcmf_input_unpacker = input_unpacker;
+    context->gcc_method_funcs->gcmf_input_free = input_free;
+    context->gcc_method_funcs->gcmf_output_packer = output_packer;
+    context->gcc_method_funcs->gcmf_output_unpacker = output_unpacker;
+    context->gcc_method_funcs->gcmf_output_free = output_free;
+    context->gcc_data.gccd_client = client;
+    context->gcc_tag = tag;
+
+    /*
+     * We send the message if input is provided.
+     */
+    if (grpc_c_ops_alloc(context, 2 + (input ? 1 : 0))) {
+	grpc_c_context_free(context);
+	return NULL;
+    }
+
+    /*
+     * We need to send client-id as part of metadata with each RPC call. Make
+     * space to hold metadata
+     */
+    if (grpc_c_add_metadata(context, "client-id", 
+			    client->gcc_id ? client->gcc_id : "")) {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "Failed to add client-id to metadata");
+	return NULL;
+    }
+    
+    /*
+     * Stuff given metadata into the call
+     */
+    if (mdarray != NULL) {
+	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
+	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
+				    mdarray->metadata[mdcount].value)) {
+		gpr_log(GPR_ERROR, "Failed to add metadata");
+		return NULL;
+	    }
+	}
+    }
+
+    /*
+     * Send initial metadata with client-id
+     */
+    context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
+    context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
+    context->gcc_ops[op_count].data.send_initial_metadata.metadata 
+	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
+    op_count++;
+
+    /*
+     * Encode data to be sent into wire format
+     */
+    if (input) {
+	input_packer(input, &context->gcc_ops_payload[op_count]);
+
+	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
+	context->gcc_ops[op_count].data.send_message 
+	    = context->gcc_ops_payload[op_count];
+	op_count++;
+    }
+
+    context->gcc_ops[op_count].op = GRPC_OP_RECV_INITIAL_METADATA;
+    context->gcc_ops[op_count].data.recv_initial_metadata 
+	= context->gcc_initial_metadata;
+    context->gcc_meta_sent = 1;
+    op_count++;
+
+    /*
+     * Add this context object to list head so we can track this
+     */
+    LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
+		     context, gcc_list);
+
+    return context;
+}
+
+
+/*
+ * Returns a context object with filled in ops for sync call
+ */
+static grpc_c_context_t *
+gc_client_prepare_sync_ops (grpc_c_client_t *client, 
+			    grpc_c_metadata_array_t *mdarray, void *input, 
+			    void *tag, int client_streaming, 
+			    int server_streaming, 
+			    grpc_c_client_callback_t *cb, 
+			    grpc_c_method_data_pack_t *input_packer, 
+			    grpc_c_method_data_unpack_t *input_unpacker, 
+			    grpc_c_method_data_free_t *input_free, 
+			    grpc_c_method_data_pack_t *output_packer, 
+			    grpc_c_method_data_unpack_t *output_unpacker, 
+			    grpc_c_method_data_free_t *output_free)
+{
+    int mdcount = 0;
+    grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
+    if (context == NULL) {
+	gpr_log(GPR_ERROR, "Failed to create context");
+	return NULL;
+    }
+
+    context->gcc_method = malloc(sizeof(struct grpc_c_method_t));
+    if (context->gcc_method == NULL) {
+	grpc_c_context_free(context);
+	return NULL;
+    }
+    bzero(context->gcc_method, sizeof(struct grpc_c_method_t));
+
+    grpc_c_stream_handler_t *stream_handler;
+    if (context->gcc_stream == NULL) {
+	stream_handler = malloc(sizeof(grpc_c_stream_handler_t));
+    } else {
+	stream_handler = context->gcc_stream;
+    }
+
+    if (stream_handler == NULL) {
+	grpc_c_context_free(context);
+	return NULL;
+    }
+
+    stream_handler->read = &gc_stream_read;
+    stream_handler->write = &gc_stream_write;
+    stream_handler->write_done = &gc_client_stream_write_done;
+    stream_handler->finish = &gc_client_stream_finish;
+    context->gcc_stream = stream_handler;
+
+    context->gcc_lock = malloc(sizeof(gpr_mu));
+    if (context->gcc_lock == NULL) {
+	gpr_log(GPR_ERROR, "Failed to allocate context lock");
+	grpc_c_context_free(context);
+	return NULL;
+    }
+    gpr_mu_init(context->gcc_lock);
+
+    context->gcc_state = GRPC_C_CLIENT_START;
+    context->gcc_cq = grpc_completion_queue_create(NULL);
+    grpc_c_grpc_set_cq_callback(context->gcc_cq, gc_handle_client_event);
+
+    int op_count = context->gcc_op_count;
+
+    /*
+     * Save packer, unpacker, free functions for input/output and client
+     * callback, client provided tag
+     */
+    context->gcc_method_funcs->gcmf_handler.gcmfh_client = cb;
+    context->gcc_method->gcm_client_streaming = client_streaming;
+    context->gcc_method->gcm_server_streaming = server_streaming;
+    context->gcc_method_funcs->gcmf_input_packer = input_packer;
+    context->gcc_method_funcs->gcmf_input_unpacker = input_unpacker;
+    context->gcc_method_funcs->gcmf_input_free = input_free;
+    context->gcc_method_funcs->gcmf_output_packer = output_packer;
+    context->gcc_method_funcs->gcmf_output_unpacker = output_unpacker;
+    context->gcc_method_funcs->gcmf_output_free = output_free;
+    context->gcc_data.gccd_client = client;
+    context->gcc_tag = tag;
+
+    /*
+     * We send the message if input is provided.
+     */
+    if (grpc_c_ops_alloc(context, 2 + (input ? 1 : 0))) {
+	grpc_c_context_free(context);
+	return NULL;
+    }
+
+    /*
+     * We need to send client-id as part of metadata with each RPC call. Make
+     * space to hold metadata
+     */
+    if (grpc_c_add_metadata(context, "client-id", 
+			    client->gcc_id ? client->gcc_id : "")) {
+	grpc_c_context_free(context);
+	gpr_log(GPR_ERROR, "Failed to add client-id to metadata");
+	return NULL;
+    }
+    
+    /*
+     * Stuff given metadata into the call
+     */
+    if (mdarray != NULL) {
+	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
+	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
+				    mdarray->metadata[mdcount].value)) {
+		gpr_log(GPR_ERROR, "Failed to add metadata");
+		return NULL;
+	    }
+	}
+    }
+
+    /*
+     * Send initial metadata with client-id
+     */
+    context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
+    context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
+    context->gcc_ops[op_count].data.send_initial_metadata.metadata 
+	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
+    op_count++;
+
+    /*
+     * Encode data to be sent into wire format
+     */
+    if (input) {
+	input_packer(input, &context->gcc_ops_payload[op_count]);
+
+	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
+	context->gcc_ops[op_count].data.send_message 
+	    = context->gcc_ops_payload[op_count];
+	op_count++;
+    }
+
+    context->gcc_ops[op_count].op = GRPC_OP_RECV_INITIAL_METADATA;
+    context->gcc_ops[op_count].data.recv_initial_metadata 
+	= context->gcc_initial_metadata;
+    context->gcc_meta_sent = 1;
+    op_count++;
+
+    /*
+     * Add this context object to list head so we can track this
+     */
+    LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
+		     context, gcc_list);
+
+    return context;
+}
+
+/*
  * Creates a context and fills initial operations for calling RPC and sending
  * initial metadata, data and request for data from server
  */
 static grpc_c_context_t *
-gc_client_prepare_ops (grpc_c_client_t *client, 
-		       grpc_c_metadata_array_t *mdarray, int sync UNUSED, 
-		       void *input, void *tag, int client_streaming, 
-		       int server_streaming, 
-		       grpc_c_client_callback_t *cb, 
-		       grpc_c_method_data_pack_t *input_packer, 
-		       grpc_c_method_data_unpack_t *input_unpacker, 
-		       grpc_c_method_data_free_t *input_free, 
-		       grpc_c_method_data_pack_t *output_packer, 
-		       grpc_c_method_data_unpack_t *output_unpacker, 
-		       grpc_c_method_data_free_t *output_free)
+gc_client_prepare_unary_ops (grpc_c_client_t *client, 
+			     grpc_c_metadata_array_t *mdarray, int sync UNUSED, 
+			     void *input, void *tag, int client_streaming, 
+			     int server_streaming, 
+			     grpc_c_client_callback_t *cb, 
+			     grpc_c_method_data_pack_t *input_packer, 
+			     grpc_c_method_data_unpack_t *input_unpacker, 
+			     grpc_c_method_data_free_t *input_free, 
+			     grpc_c_method_data_pack_t *output_packer, 
+			     grpc_c_method_data_unpack_t *output_unpacker, 
+			     grpc_c_method_data_free_t *output_free)
 {
     int mdcount = 0;
     grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
@@ -833,15 +1096,16 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 			     grpc_c_method_data_free_t *output_free)
 {
     grpc_call_error e;
-    grpc_c_context_t *context = gc_client_prepare_ops(client, NULL, 0, NULL, 
-						      tag, client_streaming, 
-						      server_streaming, 
-						      cb, input_packer, 
-						      input_unpacker, 
-						      input_free, 
-						      output_packer, 
-						      output_unpacker, 
-						      output_free);
+    grpc_c_context_t *context = gc_client_prepare_async_ops(client, NULL, 0, 
+							    NULL, tag, 
+							    client_streaming, 
+							    server_streaming, 
+							    cb, input_packer, 
+							    input_unpacker, 
+							    input_free, 
+							    output_packer, 
+							    output_unpacker, 
+							    output_free);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context with async operations");
 	return GRPC_C_FAIL;
@@ -892,16 +1156,16 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
     grpc_call_error e;
     grpc_event ev;
     gpr_timespec tout;
-    grpc_c_context_t *context = gc_client_prepare_ops(client, mdarray, 1, 
-						      input, NULL, 
-						      client_streaming, 
-						      server_streaming, 
-						      NULL, input_packer, 
-						      input_unpacker, 
-						      input_free, 
-						      output_packer, 
-						      output_unpacker, 
-						      output_free); 
+    grpc_c_context_t *context = gc_client_prepare_unary_ops(client, mdarray, 
+							    1, input, NULL, 
+							    client_streaming, 
+							    server_streaming, 
+							    NULL, input_packer, 
+							    input_unpacker, 
+							    input_free, 
+							    output_packer, 
+							    output_unpacker, 
+							    output_free); 
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context with sync operations");
 	rc = GRPC_C_FAIL;
@@ -1039,17 +1303,17 @@ grpc_c_client_request_sync (grpc_c_client_t *client,
     gpr_timespec tout;
     grpc_c_context_t *context;
 
-    if (context == NULL) {
+    if (pcontext == NULL) {
 	gpr_log(GPR_ERROR, "Invalid context pointer provided");
 	rc = GRPC_C_FAIL;
 	goto cleanup;
     }
 
-    context = gc_client_prepare_ops(client, mdarray, 1, input, NULL, 
-				    client_streaming, server_streaming, NULL, 
-				    input_packer, input_unpacker, input_free, 
-				    output_packer, output_unpacker, 
-				    output_free); 
+    context = gc_client_prepare_sync_ops(client, mdarray, input, NULL, 
+					 client_streaming, server_streaming, 
+					 NULL, input_packer, input_unpacker, 
+					 input_free, output_packer, 
+					 output_unpacker, output_free); 
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context with sync operations");
 	rc = GRPC_C_FAIL;

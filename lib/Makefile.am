@@ -17,6 +17,7 @@ libgrpc_c_la_SOURCES = \
     memory.c \
     metadata_array.c \
     service.c \
+    stream_ops.c \
     thread_pool.c \
     trace.c
 

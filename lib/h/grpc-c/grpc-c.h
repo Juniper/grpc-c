@@ -383,6 +383,8 @@ struct grpc_c_context_s {
 						   belongs to */
     grpc_c_event_t *gcc_read_event;		/* Event tag for read ops */
     grpc_c_event_t *gcc_write_event;		/* Event tag for write ops */
+    grpc_c_event_t *gcc_write_done_event;	/* Event tag for write done 
+						   from client */
     grpc_c_event_t *gcc_recv_close_event;	/* Recv close grpc-c event in 
 						   case of server context */
     union {					/* Union containing client or 
@@ -448,6 +450,9 @@ typedef int (grpc_c_stream_read_t)(grpc_c_context_t *context, void **content,
 typedef int (grpc_c_stream_write_t)(grpc_c_context_t *context, void *output, 
 				    long timeout);
 
+typedef int (grpc_c_stream_write_done_t)(grpc_c_context_t *context, 
+					 long timeout);
+
 typedef int (grpc_c_stream_finish_t)(grpc_c_context_t *context, 
 				     grpc_c_status_t *status);
 
@@ -477,6 +482,7 @@ struct grpc_c_write_handler_s {
 struct grpc_c_stream_handler_s {
     grpc_c_stream_read_t *read;
     grpc_c_stream_write_t *write;
+    grpc_c_stream_write_done_t *write_done;
     grpc_c_stream_finish_t *finish;
 };
 
