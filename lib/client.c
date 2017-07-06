@@ -293,69 +293,6 @@ gc_client_request_status (grpc_c_context_t *context)
 }
 
 /*
- * Internal function to send available initial metadata to client
-static int 
-gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
-{
-    grpc_event ev;
-    grpc_call_error e;
-
-    if (context->gcc_meta_sent == 0) {
-	if (grpc_c_ops_alloc(context, 1)) return 1;
-
-	context->gcc_ops[context->gcc_op_count].op 
-	    = GRPC_OP_SEND_INITIAL_METADATA;
-	context->gcc_ops[context->gcc_op_count]
-	    .data.send_initial_metadata.count 
-	    = context->gcc_initial_metadata->count;
-
-	if (context->gcc_initial_metadata->count > 0) {
-	    context->gcc_ops[context->gcc_op_count].data
-		.send_initial_metadata.metadata 
-		= context->gcc_initial_metadata->metadata;
-	}
-	context->gcc_op_count++;
-
-	if (send) {
-	    gpr_mu_lock(context->gcc_lock);
-	    context->gcc_event->gce_type = GRPC_C_EVENT_METADATA;
-	    context->gcc_event->gce_refcount++;
-	    e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
-				      context->gcc_op_count, context->gcc_event, 
-				      NULL);
-	    if (e == GRPC_CALL_OK) {
-		context->gcc_op_count = 0;
-	    } else {
-		gpr_log(GPR_ERROR, "Failed to finish batch operations to "
-			"send initial metadata - %d", e);
-		gpr_mu_unlock(context->gcc_lock);
-		return 1;
-	    }
-
-	    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_event, 
-					     gpr_inf_future(GPR_CLOCK_REALTIME), 
-					     NULL);
-	    if (ev.type == GRPC_OP_COMPLETE) {
-		context->gcc_event->gce_refcount--;
-	    }
-	    gpr_mu_unlock(context->gcc_lock);
-
-	    if (ev.type == GRPC_OP_COMPLETE && ev.success) {
-		context->gcc_op_count = 0;
-		context->gcc_meta_sent = 1;
-		return 0;
-	    } else {
-		return 1;
-	    }
-	} else {
-	    context->gcc_meta_sent = 1;
-	}
-    }
-    return 0;
-}
- */
-
-/*
  * Prepares context with read handler and calls the client callback. Returns 0
  * on success and 1 on failure. Caller of this function will have to assert
  * for success.
