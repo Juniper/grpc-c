@@ -855,6 +855,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
 	= context->gcc_initial_metadata;
     context->gcc_meta_sent = 1;
     op_count++;
+    context->gcc_op_count = op_count;
 
     /*
      * Add this context object to list head so we can track this
