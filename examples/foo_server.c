@@ -46,7 +46,7 @@ foo__greeter__say_hello_cb (grpc_c_context_t *context)
     /*
      * Write reply back to the client
      */
-    if (!context->gcc_stream->write(context, &r, 0)) {
+    if (!context->gcc_stream->write(context, &r, -1)) {
         printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
     } else {
         printf("Failed to write\n");
@@ -88,18 +88,18 @@ main (int argc, char **argv)
     /*
      * Create server object
      */
-    test_server = grpc_c_server_create(argv[1]);
+    test_server = grpc_c_server_create(argv[1], NULL, NULL);
     if (test_server == NULL) {
 	printf("Failed to create server\n");
 	exit(1);
     }
 
+    grpc_c_server_add_insecure_http2_port(test_server, "127.0.0.1:3000");
+
     /*
      * Initialize greeter service
      */
     foo__greeter__service_init(test_server);
-
-    grpc_c_server_add_insecure_http2_port(test_server, "127.0.0.1:30000");
 
     /*
      * Start server

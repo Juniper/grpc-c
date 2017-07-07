@@ -124,16 +124,6 @@ grpc_c_register_method (grpc_c_server_t *server, const char *method,
 }
 
 /*
- * Sends available initial metadata. Returns 0 on success and 1 on failure.
- * This function will block caller
- */
-int 
-grpc_c_send_initial_metadata (grpc_c_context_t *context) 
-{
-    return gc_send_initial_metadata_internal(context, 1);
-}
-
-/*
  * Finishes read operations and clears payload buffer
  */
 static int
@@ -143,79 +133,6 @@ gc_read_ops_finish (grpc_c_context_t *context, grpc_c_status_t *status UNUSED)
     context->gcc_payload = NULL;
 
     return 0;
-}
-
-/*
- * Fills context with ops to send data and status.
- */
-static int
-gc_stream_finish_internal (grpc_c_context_t *context, int status, 
-			   const char *msg)
-{
-    int op_count = context->gcc_op_count;
-
-    /*
-     * If initial metadata is not sent, send inital metadata before sending 
-     * close
-     */
-    gc_send_initial_metadata_internal(context, 0);
-
-    if (grpc_c_ops_alloc(context, 1)) {
-	gpr_log(GPR_ERROR, "Failed to allocate memory for ops");
-	return 1;
-    }
-
-    context->gcc_ops[context->gcc_op_count].op = GRPC_OP_SEND_STATUS_FROM_SERVER;
-
-    /*
-     * Return code of anything other than 0 will be sent as unknown error code
-     */
-    context->gcc_status = (status == 0) ? GRPC_STATUS_OK : GRPC_STATUS_UNKNOWN;
-    context->gcc_ops[context->gcc_op_count].data.send_status_from_server.status 
-	= context->gcc_status;
-    context->gcc_ops[context->gcc_op_count].data.send_status_from_server
-	.trailing_metadata_count = 0;
-    context->gcc_ops[context->gcc_op_count].data.send_status_from_server
-	.status_details = (msg != NULL) ? msg : "";
-    context->gcc_op_count++;
-
-    gpr_mu_lock(context->gcc_lock);
-    context->gcc_event->gce_type = GRPC_C_EVENT_WRITE_FINISH;
-    context->gcc_event->gce_refcount++;
-    grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
-					      context->gcc_ops, 
-					      context->gcc_op_count - op_count, 
-					      context->gcc_event, NULL);
-    gpr_mu_unlock(context->gcc_lock);
-
-    /*
-     * If we are finishing while we have a write pending, do not mark for
-     * cleanup rightaway
-     */
-    if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
-	context->gcc_cancelled = 1;
-    } else {
-	context->gcc_state = GRPC_C_SERVER_CONTEXT_CLEANUP;
-    }
-
-    if (e == GRPC_CALL_OK) {
-	context->gcc_op_count = 0;
-	return 0;
-    } else {
-	gpr_log(GPR_ERROR, "Failed to finish write batch ops");
-	return 1;
-    }
-}
-
-/*
- * Finishes write operations with an empty message and a status code. Returns
- * 0 on success. 1 on failure
- */
-static int
-gc_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
-{
-    return gc_stream_finish_internal(context, status->gcs_code, 
-				     status->gcs_message);
 }
 
 static int
@@ -321,11 +238,21 @@ gc_prepare_server_callback (grpc_c_context_t *context)
 	return 1;
     }
 
+    /*
+     * Fill in packer/unpacker functions for input and output
+     */
+    if (context->gcc_data.gccd_server 
+	&& context->gcc_data.gccd_server->gcs_method_funcs) {
+	memcpy(context->gcc_method_funcs, 
+	       &context->gcc_data.gccd_server->gcs_method_funcs[method_id], 
+	       sizeof(grpc_c_method_funcs_t));
+    }
+
     context->gcc_stream = stream_handler;
 
     stream_handler->read = &gc_stream_read;
     stream_handler->write = &gc_stream_write;
-    stream_handler->finish = &gc_stream_finish;
+    stream_handler->finish = &gc_server_stream_finish;
 
     /*
      * Reregister the method so next call to this RPC can be caught
@@ -516,8 +443,10 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 		gpr_cv_signal(&server->gcs_shutdown_cv);
 	    }
 	} else {
-	    gc_stream_finish_internal(context, context->gcc_status, 
-				      NULL);
+	    grpc_c_status_t status;
+	    status.gcs_code = context->gcc_status;
+	    bzero(status.gcs_message, sizeof(status.gcs_message));
+	    gc_server_stream_finish(context, &status);
 	}
     } else if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
 	/*
@@ -902,7 +831,8 @@ grpc_c_register_disconnect_callback (grpc_c_server_t *server,
  * Creates a grpc server for given host
  */
 static grpc_c_server_t *
-gc_server_create_internal (const char *host)
+gc_server_create_internal (const char *host, grpc_server_credentials *creds, 
+			   grpc_channel_args *args)
 {
     /*
      * Server structure stuff
@@ -915,15 +845,27 @@ gc_server_create_internal (const char *host)
 
     server->gcs_cq = grpc_completion_queue_create(NULL);
     grpc_c_grpc_set_cq_callback(server->gcs_cq, gc_handle_server_event);
-    server->gcs_server = grpc_server_create(NULL, NULL);
+    server->gcs_server = grpc_server_create(args, NULL);
     server->gcs_host = strdup(host);
     gpr_mu_init(&server->gcs_lock);
     gpr_cv_init(&server->gcs_cq_destroy_cv);
     gpr_cv_init(&server->gcs_shutdown_cv);
 
-    if (grpc_server_add_insecure_http2_port(server->gcs_server, host) == 0) {
-	grpc_c_server_destroy(server);
-	return NULL;
+    /*
+     * If we have credentials, we create a secure server
+     */
+    if (creds) {
+	if (grpc_server_add_secure_http2_port(server->gcs_server, host, 
+					      creds) == 0) {
+	    grpc_c_server_destroy(server);
+	    return NULL;
+	}
+    } else {
+	if (grpc_server_add_insecure_http2_port(server->gcs_server, 
+						host) == 0) {
+	    grpc_c_server_destroy(server);
+	    return NULL;
+	}
     }
     grpc_server_register_completion_queue(server->gcs_server, server->gcs_cq, 
 					  NULL);
@@ -936,7 +878,8 @@ gc_server_create_internal (const char *host)
  * Creates a grpc-c server with provided name
  */
 grpc_c_server_t *
-grpc_c_server_create (const char *name)
+grpc_c_server_create (const char *name, grpc_server_credentials *creds, 
+		      grpc_channel_args *args)
 {
     char buf[BUFSIZ];
 
@@ -950,7 +893,7 @@ grpc_c_server_create (const char *name)
 	return NULL;
     }
     
-    return gc_server_create_internal(buf);
+    return gc_server_create_internal(buf, creds, args);
 }
 
 /*
@@ -958,7 +901,7 @@ grpc_c_server_create (const char *name)
  */
 int
 grpc_c_server_add_insecure_http2_port (grpc_c_server_t *server, 
-				       const char* addr UNUSED) 
+				       const char* addr) 
 {
     if (server == NULL) return 1;
 

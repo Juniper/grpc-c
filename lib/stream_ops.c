@@ -10,7 +10,7 @@
  * Figure out deadline to finish the operation. A timeout of -1 will
  * block till we get event back or the operation fails before that
  */
-static gpr_timespec 
+gpr_timespec 
 gc_deadline_from_timeout (long timeout) 
 {
     gpr_timespec deadline;
@@ -233,6 +233,7 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
 	context->gcc_ops[op_count].data.send_message 
 	    = context->gcc_ops_payload[op_count];
+	context->gcc_op_count++;
 
 	context->gcc_write_event->gce_type = GRPC_C_EVENT_WRITE;
 	context->gcc_write_event->gce_refcount++;
@@ -403,4 +404,75 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
     }
 
     return context->gcc_status;
+}
+
+/*
+ * Server stream finish function
+ */
+int
+gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
+{
+    int op_count = context->gcc_op_count;
+
+    /*
+     * If initial metadata is not sent, send inital metadata before sending 
+     * close
+     */
+    if (gc_send_initial_metadata_internal(context, 0)) {
+	gpr_log(GPR_ERROR, "Failed to send initial metadata");
+	return GRPC_C_FAIL;
+    }
+
+    if (grpc_c_ops_alloc(context, 1)) {
+	gpr_log(GPR_ERROR, "Failed to allocate memory for ops");
+	return 1;
+    }
+
+    context->gcc_ops[context->gcc_op_count].op = GRPC_OP_SEND_STATUS_FROM_SERVER;
+    context->gcc_status = status->gcs_code;
+    context->gcc_ops[context->gcc_op_count].data.send_status_from_server.status 
+	= context->gcc_status;
+    context->gcc_ops[context->gcc_op_count].data.send_status_from_server
+	.trailing_metadata_count = 0;
+    context->gcc_ops[context->gcc_op_count].data
+	.send_status_from_server.status_details 
+	= (status->gcs_message != NULL) ? status->gcs_message : "";
+    context->gcc_op_count++;
+
+    gpr_mu_lock(context->gcc_lock);
+    context->gcc_event->gce_type = GRPC_C_EVENT_WRITE_FINISH;
+    context->gcc_event->gce_refcount++;
+    grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
+					      context->gcc_ops, 
+					      context->gcc_op_count - op_count, 
+					      context->gcc_event, NULL);
+    gpr_mu_unlock(context->gcc_lock);
+
+    /*
+     * If we are finishing while we have a write pending, do not mark for
+     * cleanup rightaway
+     */
+    if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
+	context->gcc_cancelled = 1;
+    } else {
+	context->gcc_state = GRPC_C_SERVER_CONTEXT_CLEANUP;
+    }
+
+    if (e == GRPC_CALL_OK) {
+	context->gcc_op_count = 0;
+	return 0;
+    } else {
+	gpr_log(GPR_ERROR, "Failed to finish write batch ops");
+	return 1;
+    }
+}
+
+/*
+ * Sends available initial metadata. Returns 0 on success and 1 on failure.
+ * This function will block caller
+ */
+int 
+grpc_c_send_initial_metadata (grpc_c_context_t *context) 
+{
+    return gc_send_initial_metadata_internal(context, 1);
 }

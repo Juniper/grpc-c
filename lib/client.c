@@ -25,7 +25,9 @@ static int gc_handle_connectivity_change (grpc_completion_queue *cq);
  * client-id and hostname
  */
 static grpc_c_client_t * 
-gc_client_create_by_host (const char *host, const char *id)
+gc_client_create_by_host (const char *host, const char *id, 
+			  grpc_channel_credentials *creds, 
+			  grpc_channel_args *args)
 {
     grpc_c_client_t *client;
 
@@ -57,9 +59,16 @@ gc_client_create_by_host (const char *host, const char *id)
     }
 
     /*
-     * Create a channel using given hostname
+     * Create a channel using given hostname. If channel credentials are
+     * provided, create a secure channel. Otherwise go for an insecure one
      */
-    client->gcc_channel = grpc_insecure_channel_create(host, NULL, NULL);
+    if (creds) {
+	client->gcc_channel = grpc_secure_channel_create(creds, host, args, 
+							 NULL);
+    } else {
+	client->gcc_channel = grpc_insecure_channel_create(host, args, NULL);
+    }
+
     if (client->gcc_channel == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create a channel");
 	grpc_c_client_free(client);
@@ -111,11 +120,25 @@ gc_client_create_by_host (const char *host, const char *id)
 /*
  * Creates a client instance using hostname
  */
-static grpc_c_client_t *
-gc_client_init_by_host (const char *hostname, const char *client_id) {
+grpc_c_client_t *
+grpc_c_client_init_by_host (const char *hostname, const char *client_id, 
+			    grpc_channel_credentials *creds, 
+			    grpc_channel_args *channel_args) 
+{
+    grpc_c_client_t *client;
+
     if (hostname == NULL || client_id == NULL) return NULL;
 
-    return gc_client_create_by_host(hostname, client_id);
+    client = gc_client_create_by_host(hostname, client_id, creds, 
+				      channel_args);
+
+    if (client != NULL) {
+	if (grpc_c_get_thread_pool()) {
+	    gpr_cv_init(&client->gcc_callback_cv);
+	}
+    }
+
+    return client;
 }
 
 /*
@@ -123,7 +146,7 @@ gc_client_init_by_host (const char *hostname, const char *client_id) {
  */
 grpc_c_client_t *
 grpc_c_client_init (const char *server_name, const char *client_id, 
-		    grpc_channel_credentials *creds)
+		    grpc_channel_credentials *creds, grpc_channel_args *args)
 {
     grpc_c_client_t *client;
     char buf[BUFSIZ];
@@ -141,14 +164,7 @@ grpc_c_client_init (const char *server_name, const char *client_id,
 	return NULL;
     }
 
-    client = gc_client_init_by_host(buf, client_id);
-
-    if (client != NULL) {
-	if (grpc_c_get_thread_pool()) {
-	    gpr_cv_init(&client->gcc_callback_cv);
-	}
-    }
-    return client;
+    return grpc_c_client_init_by_host(buf, client_id, creds, args);
 }
 
 /*
@@ -1131,13 +1147,9 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
 
     /*
      * In sync operations, we block till the event we are interested in is
-     * available. If timeout is zero, then we block till call is executed
+     * available. If timeout is -1, then we block till call is executed
      */
-    if (timeout == 0) {
-	tout = gpr_inf_future(GPR_CLOCK_REALTIME);
-    } else {
-	tout = gpr_time_from_seconds(timeout, GPR_CLOCK_REALTIME);
-    }
+    tout = gc_deadline_from_timeout(timeout);
 
     ev = grpc_completion_queue_pluck(context->gcc_cq, context, tout, NULL);
 
@@ -1281,13 +1293,9 @@ grpc_c_client_request_sync (grpc_c_client_t *client,
 
     /*
      * In sync operations, we block till the event we are interested in is
-     * available. If timeout is zero, then we block till call is executed
+     * available. If timeout is -1, then we block till call is executed
      */
-    if (timeout == 0) {
-	tout = gpr_inf_future(GPR_CLOCK_REALTIME);
-    } else {
-	tout = gpr_time_from_seconds(timeout, GPR_CLOCK_REALTIME);
-    }
+    tout = gc_deadline_from_timeout(timeout);
 
     ev = grpc_completion_queue_pluck(context->gcc_cq, context, tout, NULL);
 

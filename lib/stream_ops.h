@@ -33,9 +33,20 @@ int gc_stream_write (grpc_c_context_t *context, void *input, long timeout);
 int gc_client_stream_write_done (grpc_c_context_t *context, long timeout);
 
 /*
- * Finishes stream
+ * Finishes stream from client
  */
 int gc_client_stream_finish (grpc_c_context_t *context, 
 			     grpc_c_status_t *status);
+
+/*
+ * Finishes stream from server
+ */
+int gc_server_stream_finish (grpc_c_context_t *context, 
+			     grpc_c_status_t *status);
+
+/*
+ * Calculate timeout spec from millisecs
+ */
+gpr_timespec gc_deadline_from_timeout (long timeout); 
 
 #endif

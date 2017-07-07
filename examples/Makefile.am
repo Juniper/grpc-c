@@ -18,12 +18,10 @@ foo.grpc-c.c foo.grpc-c.h foo.grpc-c.service.c:
 
 LDADD = \
     ../lib/libgrpc-c.la \
-    /usr/local/lib/libgrpc.a \
-    /usr/local/lib/libgpr.a \
-    /usr/local/lib/libprotobuf-c.a \
+    -lgrpc \
+    -lgpr \
+    -lprotobuf-c \
     -lpthread
-
-LDLIBS = 
 
 AM_CFLAGS = \
     -I. \

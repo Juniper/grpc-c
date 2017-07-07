@@ -274,18 +274,21 @@ typedef void (grpc_c_writer_resolve_callback_t)(grpc_c_context_t *context,
 
 /*
  * Initialize a client with client_id to server_name. We build unix domain
- * socket path to server from server_name
- */
-grpc_c_client_t *grpc_c_client_init (const char *server_name, 
-				     const char *client_id, 
-				     grpc_channel_credentials *creds);
-
-/*
- * Initializes client using provided hostname
+ * socket path to server from server_name. When channel_creds is given, we
+ * create a secure channel. Otherwise it'll be an insecure one.
  */
 grpc_c_client_t *
-grpc_c_client_init_by_hostname (const char *hostname, const char *client_id, 
-				grpc_channel_credentials *creds);
+grpc_c_client_init (const char *server_name, const char *client_id, 
+		    grpc_channel_credentials *channel_creds, 
+		    grpc_channel_args *channel_args); 
+
+/*
+ * Initialize a client with client_id and server address
+ */
+grpc_c_client_t *
+grpc_c_client_init_by_host (const char *address, const char *client_id, 
+			    grpc_channel_credentials *channel_creds, 
+			    grpc_channel_args *channel_args); 
 
 /*
  * Waits for all callbacks to get done in a threaded client
@@ -581,7 +584,10 @@ void grpc_c_server_wait (grpc_c_server_t *server);
  * Create a server object with given daemon name. We build unix domain socket
  * path from this name
  */
-grpc_c_server_t *grpc_c_server_create (const char *name);
+grpc_c_server_t *
+grpc_c_server_create (const char *name, 
+		      grpc_server_credentials *creds, 
+		      grpc_channel_args *args);
 
 /*
  * Destroy and free grpc-c server
