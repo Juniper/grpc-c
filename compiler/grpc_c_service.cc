@@ -135,8 +135,8 @@ void GrpcCServiceGenerator::GenerateCallersDeclarations(io::Printer* printer)
     /* Async request */
     printer->Print(vars_,
                    "\nint $lcfullname$__$method$__async (grpc_c_client_t *client, "
-		   "void *tag, \n"
-		   "    $padddddddddddddddddd$       grpc_c_client_callback_t *cb);\n");
+		   "grpc_c_metadata_array_t *array, $input_typename$ *input, \n"
+		   "$padddddddddddddddddd$grpc_c_client_callback_t *cb, void *tag);\n");
 
     /* callback */
     printer->Print(vars_,
@@ -312,13 +312,15 @@ void GrpcCServiceGenerator::GenerateCallersImplementations(io::Printer* printer)
     printer->Print(vars_,
                    "\nint \n"
 		   "$lcfullname$__$method$__async (grpc_c_client_t *client, \n"
-                   "$padddddddddddddddddd$        void *tag,\n"
-		   "$padddddddddddddddddd$        grpc_c_client_callback_t *cb)\n"
+                   "$padddddddddddddddddd$        grpc_c_metadata_array_t *array,\n"
+                   "$padddddddddddddddddd$        $input_typename$ *input,\n"
+		   "$padddddddddddddddddd$        grpc_c_client_callback_t *cb,\n"
+                   "$padddddddddddddddddd$        void *tag)\n"
 		   "{\n"
-		   "    return grpc_c_client_request_async(client, $lcfullname$__methods[$index$], "
-		   "(void *)tag, $client_streaming$, $server_streaming$, "
-		   "cb, &$input_lower$_packer, &$input_lower$_unpacker, "
-		   "&$input_lower$_free, &$output_lower$_packer,"
+		   "    return grpc_c_client_request_async(client, array, $lcfullname$__methods[$index$], "
+		   "input, cb, tag, $client_streaming$, $server_streaming$, "
+		   "&$input_lower$_packer, &$input_lower$_unpacker, "
+		   "&$input_lower$_free, &$output_lower$_packer, "
 		   "&$output_lower$_unpacker, &$output_lower$_free);\n"
 		   "}\n");
   }

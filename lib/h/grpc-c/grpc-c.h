@@ -747,10 +747,12 @@ int grpc_c_client_request_sync (grpc_c_client_t *client,
 /*
  * Main function for asynchronous/streaming RPC call from client
  */
-int grpc_c_client_request_async (grpc_c_client_t *client, const char *method, 
+int grpc_c_client_request_async (grpc_c_client_t *client, 
+				 grpc_c_metadata_array_t *mdarray, 
+				 const char *method, 
+				 void *input, grpc_c_client_callback_t *cb, 
 				 void *tag, int client_streaming, 
 				 int server_streaming, 
-				 grpc_c_client_callback_t *cb, 
 				 grpc_c_method_data_pack_t *input_packer, 
 				 grpc_c_method_data_unpack_t *input_unpacker, 
 				 grpc_c_method_data_free_t *input_free, 

@@ -94,7 +94,7 @@ gc_client_create_by_host (const char *host, const char *id,
 
     if (grpc_c_get_type() > GRPC_THREADS) {
 	grpc_c_grpc_set_cq_callback(client->gcc_channel_connectivity_cq, 
-			     gc_handle_connectivity_change);
+				    gc_handle_connectivity_change);
 	client->gcc_channel_state 
 	    = grpc_channel_check_connectivity_state(client->gcc_channel, 0);
 
@@ -603,10 +603,9 @@ gc_handle_client_event (grpc_completion_queue *cq)
  */
 static grpc_c_context_t *
 gc_client_prepare_async_ops (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, int sync, 
-			     void *input, void *tag, int client_streaming, 
-			     int server_streaming, 
-			     grpc_c_client_callback_t *cb, 
+			     grpc_c_metadata_array_t *mdarray, void *input, 
+			     grpc_c_client_callback_t *cb, void *tag, 
+			     int client_streaming, int server_streaming, 
 			     grpc_c_method_data_pack_t *input_packer, 
 			     grpc_c_method_data_unpack_t *input_unpacker, 
 			     grpc_c_method_data_free_t *input_free, 
@@ -708,12 +707,25 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
 	= context->gcc_initial_metadata;
     context->gcc_meta_sent = 1;
     op_count++;
+    context->gcc_op_count = op_count;
 
     /*
      * Add this context object to list head so we can track this
      */
     LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
 		     context, gcc_list);
+
+    /*
+     * If we are async, we need a thread in background to process events
+     * from completion queue. Otherwise we pluck in the same thread
+     */
+    if (grpc_c_get_thread_pool() && !client->gcc_shutdown) {
+	grpc_c_thread_pool_add(grpc_c_get_thread_pool(), gc_run_rpc, 
+			       context->gcc_cq);
+    }
+    gpr_mu_lock(&client->gcc_lock);
+    client->gcc_running_cb++;
+    gpr_mu_unlock(&client->gcc_lock);
 
     return context;
 }
@@ -872,8 +884,8 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
  */
 static grpc_c_context_t *
 gc_client_prepare_unary_ops (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, int sync UNUSED, 
-			     void *input, void *tag, int client_streaming, 
+			     grpc_c_metadata_array_t *mdarray, void *input, 
+			     void *tag, int client_streaming, 
 			     int server_streaming, 
 			     grpc_c_client_callback_t *cb, 
 			     grpc_c_method_data_pack_t *input_packer, 
@@ -1016,18 +1028,6 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
     LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
 		     context, gcc_list);
 
-    /*
-     * If we are async, we need a thread in background to process events
-     * from completion queue. Otherwise we pluck in the same thread
-     */
-    if (grpc_c_get_thread_pool() && !client->gcc_shutdown && !sync) {
-	grpc_c_thread_pool_add(grpc_c_get_thread_pool(), gc_run_rpc, 
-			       context->gcc_cq);
-    }
-    gpr_mu_lock(&client->gcc_lock);
-    client->gcc_running_cb++;
-    gpr_mu_unlock(&client->gcc_lock);
-
     return context;
 }
 
@@ -1038,10 +1038,11 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
  * these functions.
  */
 int
-grpc_c_client_request_async (grpc_c_client_t *client, const char *method, 
-			     void *tag, int client_streaming, 
-			     int server_streaming, 
-			     grpc_c_client_callback_t *cb, 
+grpc_c_client_request_async (grpc_c_client_t *client, 
+			     grpc_c_metadata_array_t *mdarray, 
+			     const char *method, void *input, 
+			     grpc_c_client_callback_t *cb, void *tag, 
+			     int client_streaming, int server_streaming, 
 			     grpc_c_method_data_pack_t *input_packer, 
 			     grpc_c_method_data_unpack_t *input_unpacker, 
 			     grpc_c_method_data_free_t *input_free, 
@@ -1050,11 +1051,11 @@ grpc_c_client_request_async (grpc_c_client_t *client, const char *method,
 			     grpc_c_method_data_free_t *output_free)
 {
     grpc_call_error e;
-    grpc_c_context_t *context = gc_client_prepare_async_ops(client, NULL, 0, 
-							    NULL, tag, 
+    grpc_c_context_t *context = gc_client_prepare_async_ops(client, mdarray, 
+							    input, cb, tag,  
 							    client_streaming, 
 							    server_streaming, 
-							    cb, input_packer, 
+							    input_packer, 
 							    input_unpacker, 
 							    input_free, 
 							    output_packer, 
@@ -1111,7 +1112,7 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
     grpc_event ev;
     gpr_timespec tout;
     grpc_c_context_t *context = gc_client_prepare_unary_ops(client, mdarray, 
-							    1, input, NULL, 
+							    input, NULL, 
 							    client_streaming, 
 							    server_streaming, 
 							    NULL, input_packer, 
