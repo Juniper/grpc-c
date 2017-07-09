@@ -51,5 +51,6 @@ main (int argc, char **argv)
     if (r) {
 	printf("Got back: %s\n", r->message);
     }
+    context->gcc_stream->finish(context, NULL);
     printf("Finished with %d\n", status);
 }
