@@ -9,7 +9,9 @@ bin_PROGRAMS = \
     foo_client \
     foo_server \
     unary_sync_server \
-    unary_sync_client
+    unary_sync_client \
+    unary_async_client \
+    unary_async_server
 
 foo_client_SOURCES = \
     foo_client.c \
@@ -28,6 +30,17 @@ unary_sync_client_SOURCES = \
     foo.grpc-c.h
 
 unary_sync_server_SOURCES = \
+    foo_server.c \
+    foo.grpc-c.c \
+    foo.grpc-c.h \
+    foo.grpc-c.service.c
+
+unary_async_client_SOURCES = \
+    unary_async_client.c \
+    foo.grpc-c.c \
+    foo.grpc-c.h
+
+unary_async_server_SOURCES = \
     foo_server.c \
     foo.grpc-c.c \
     foo.grpc-c.h \
