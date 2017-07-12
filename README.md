@@ -35,6 +35,6 @@ Pre-alpha. Under active development. APIs may change.
 
 ## Dependencies
 
-- gRPC master
+- gRPC [v1.3.0](https://github.com/grpc/grpc/releases/tag/v1.3.0)
 - protobuf 3.0
 - protobuf-c 1.2.1
