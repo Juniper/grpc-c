@@ -42,14 +42,15 @@ const char *
 grpc_get_metadata_by_array (grpc_c_metadata_array_t *mdarray, const char *key)
 {
     size_t i;
-    const char *value = NULL;
+    char *value = NULL;
     /*
      * Search the metadata array for key and if found, return the value
      */
     if (mdarray && mdarray->count > 0) {
 	for (i = 0; i < mdarray->count; i++) {
-	    if (streq(mdarray->metadata[i].key, key)) {
-		value = mdarray->metadata[i].value;
+	    if (grpc_slice_str_cmp(mdarray->metadata[i].key, key) == 0) {
+		value = GRPC_SLICE_START_PTR(mdarray->metadata[i].value);
+		value[GRPC_SLICE_LENGTH(mdarray->metadata[i].value)] = '\0';
 		break;
 	    }
 	}
@@ -94,10 +95,9 @@ grpc_c_add_metadata_by_array (grpc_c_metadata_array_t *mdarray,
     (*store)[(mdarray->count - 1) * 2 + 1] = gpr_strdup(value);
 
     mdarray->metadata[mdarray->count - 1].key 
-	= (*store)[(mdarray->count - 1) * 2];
+	= grpc_slice_from_static_string((*store)[(mdarray->count - 1) * 2]);
     mdarray->metadata[mdarray->count - 1].value 
-	= (*store)[(mdarray->count - 1) * 2 + 1];
-    mdarray->metadata[mdarray->count - 1].value_length = strlen(value);
+	= grpc_slice_from_static_string((*store)[(mdarray->count - 1) * 2 + 1]);
 
     return 0;
 }

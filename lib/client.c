@@ -51,12 +51,7 @@ gc_client_create_by_host (const char *host, const char *id,
 	return NULL;
     }
 
-    client->gcc_host = strdup(host);
-    if (client->gcc_host == NULL) {
-	gpr_log(GPR_ERROR, "Failed to copy hostname");
-	grpc_c_client_free(client);
-	return NULL;
-    }
+    client->gcc_host = grpc_slice_from_copied_string(host);
 
     /*
      * Create a channel using given hostname. If channel credentials are
@@ -189,8 +184,8 @@ grpc_c_client_free (grpc_c_client_t *client)
 	    gpr_mu_unlock(&client->gcc_lock);
 	}
 
-	if (client->gcc_host) free(client->gcc_host);
 	if (client->gcc_id) free(client->gcc_id);
+	grpc_slice_unref(client->gcc_host);
 
 	/*
 	 * If we have any active context objects, free them before shutting
@@ -256,7 +251,8 @@ gc_client_request_data (grpc_c_context_t *context)
     if (grpc_c_ops_alloc(context, 1)) return 1;
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_MESSAGE;
-    context->gcc_ops[op_count].data.recv_message = &context->gcc_payload;
+    context->gcc_ops[op_count].data.recv_message.recv_message 
+	= &context->gcc_payload;
     context->gcc_op_count++;
 
     grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
@@ -291,8 +287,6 @@ gc_client_request_status (grpc_c_context_t *context)
 	= &context->gcc_status;
     context->gcc_ops[op_count].data.recv_status_on_client.status_details 
 	= &context->gcc_status_details;
-    context->gcc_ops[op_count].data.recv_status_on_client.status_details_capacity 
-	= &context->gcc_status_details_capacity;
     context->gcc_op_count++;
 
     grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
@@ -567,6 +561,7 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
 			     grpc_c_method_data_free_t *output_free)
 {
     int mdcount = 0;
+    char *mdkey, *mdvalue;
     grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context");
@@ -626,11 +621,15 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
      */
     if (mdarray != NULL) {
 	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
-	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
-				    mdarray->metadata[mdcount].value)) {
+	    mdkey = grpc_slice_to_c_string(mdarray->metadata[mdcount].key);
+	    mdvalue = grpc_slice_to_c_string(mdarray->metadata[mdcount].value);
+	    if (grpc_c_add_metadata(context, (const char *)mdkey, 
+				    (const char *)mdvalue)) {
 		gpr_log(GPR_ERROR, "Failed to add metadata");
 		return NULL;
 	    }
+	    gpr_free(mdkey);
+	    gpr_free(mdvalue);
 	}
     }
 
@@ -650,13 +649,13 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
 	input_packer(input, &context->gcc_ops_payload[op_count]);
 
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
-	context->gcc_ops[op_count].data.send_message 
+	context->gcc_ops[op_count].data.send_message.send_message 
 	    = context->gcc_ops_payload[op_count];
 	op_count++;
     }
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_INITIAL_METADATA;
-    context->gcc_ops[op_count].data.recv_initial_metadata 
+    context->gcc_ops[op_count].data.recv_initial_metadata.recv_initial_metadata 
 	= context->gcc_initial_metadata;
     context->gcc_meta_sent = 1;
     op_count++;
@@ -701,6 +700,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
 			    grpc_c_method_data_free_t *output_free)
 {
     int mdcount = 0;
+    char *mdkey, *mdvalue;
     grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context");
@@ -786,11 +786,15 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
      */
     if (mdarray != NULL) {
 	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
-	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
-				    mdarray->metadata[mdcount].value)) {
+	    mdkey = grpc_slice_to_c_string(mdarray->metadata[mdcount].key);
+	    mdvalue = grpc_slice_to_c_string(mdarray->metadata[mdcount].value);
+	    if (grpc_c_add_metadata(context, (const char *)mdkey, 
+				    (const char *)mdvalue)) {
 		gpr_log(GPR_ERROR, "Failed to add metadata");
 		return NULL;
 	    }
+	    gpr_free(mdkey);
+	    gpr_free(mdvalue);
 	}
     }
 
@@ -810,13 +814,13 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
 	input_packer(input, &context->gcc_ops_payload[op_count]);
 
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
-	context->gcc_ops[op_count].data.send_message 
+	context->gcc_ops[op_count].data.send_message.send_message 
 	    = context->gcc_ops_payload[op_count];
 	op_count++;
     }
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_INITIAL_METADATA;
-    context->gcc_ops[op_count].data.recv_initial_metadata 
+    context->gcc_ops[op_count].data.recv_initial_metadata.recv_initial_metadata  
 	= context->gcc_initial_metadata;
     context->gcc_meta_sent = 1;
     op_count++;
@@ -852,6 +856,7 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
 			     grpc_c_method_data_free_t *output_free)
 {
     int mdcount = 0;
+    char *mdkey, *mdvalue;
     grpc_c_context_t *context = grpc_c_context_init(NULL, 1);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context");
@@ -914,11 +919,15 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
      */
     if (mdarray != NULL) {
 	for (mdcount = 0; mdcount < mdarray->count; mdcount++) {
-	    if (grpc_c_add_metadata(context, mdarray->metadata[mdcount].key, 
-				    mdarray->metadata[mdcount].value)) {
+	    mdkey = grpc_slice_to_c_string(mdarray->metadata[mdcount].key);
+	    mdvalue = grpc_slice_to_c_string(mdarray->metadata[mdcount].value);
+	    if (grpc_c_add_metadata(context, (const char *)mdkey, 
+				    (const char *)mdvalue)) {
 		gpr_log(GPR_ERROR, "Failed to add metadata");
 		return NULL;
 	    }
+	    gpr_free(mdkey);
+	    gpr_free(mdvalue);
 	}
     }
 
@@ -937,7 +946,7 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
     input_packer(input, &context->gcc_ops_payload[op_count]);
 
     context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
-    context->gcc_ops[op_count].data.send_message 
+    context->gcc_ops[op_count].data.send_message.send_message  
 	= context->gcc_ops_payload[op_count];
     op_count++;
 
@@ -945,12 +954,13 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
     op_count++;
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_INITIAL_METADATA;
-    context->gcc_ops[op_count].data.recv_initial_metadata 
+    context->gcc_ops[op_count].data.recv_initial_metadata.recv_initial_metadata 
 	= context->gcc_initial_metadata;
     op_count++;
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_MESSAGE;
-    context->gcc_ops[op_count].data.recv_message = &context->gcc_payload;
+    context->gcc_ops[op_count].data.recv_message.recv_message 
+	= &context->gcc_payload;
     op_count++;
 
     /*
@@ -964,8 +974,6 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
 	    = &context->gcc_status;
 	context->gcc_ops[op_count].data.recv_status_on_client.status_details 
 	    = &context->gcc_status_details;
-	context->gcc_ops[op_count].data.recv_status_on_client.status_details_capacity 
-	    = &context->gcc_status_details_capacity;
 	op_count++;
 
 	/*
@@ -1025,12 +1033,12 @@ grpc_c_client_request_async (grpc_c_client_t *client,
     /*
      * Create call to the required RPC
      */
-    context->gcc_call = grpc_channel_create_call(client->gcc_channel, 
-						 NULL, 0, 
-						 context->gcc_cq, method, 
-						 client->gcc_host, 
-						 gpr_inf_future(GPR_CLOCK_REALTIME), 
-						 NULL);
+    context->gcc_call 
+	= grpc_channel_create_call(client->gcc_channel, NULL, 0, 
+				   context->gcc_cq, 
+				   grpc_slice_from_static_string(method), 
+				   &client->gcc_host, 
+				   gpr_inf_future(GPR_CLOCK_REALTIME), NULL);
     context->gcc_event.gce_data = context;
 
     e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
@@ -1084,12 +1092,12 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
 	goto cleanup;
     }
     
-    context->gcc_call = grpc_channel_create_call(client->gcc_channel, 
-						 NULL, 0, 
-						 context->gcc_cq, method, 
-						 client->gcc_host, 
-						 gpr_inf_future(GPR_CLOCK_REALTIME), 
-						 NULL);
+    context->gcc_call 
+	= grpc_channel_create_call(client->gcc_channel, NULL, 0, 
+				   context->gcc_cq, 
+				   grpc_slice_from_static_string(method), 
+				   &client->gcc_host, 
+				   gpr_inf_future(GPR_CLOCK_REALTIME), NULL);
 
     e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
 			      context->gcc_op_count, context, NULL);
@@ -1150,8 +1158,10 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
      */
     if (status) {
 	status->gcs_code = context->gcc_status;
-	if (context->gcc_status_details_capacity > 0) {
-	    strlcpy(status->gcs_message, context->gcc_status_details, 
+	char *status_message 
+	    = grpc_slice_to_c_string(context->gcc_status_details);
+	if (status_message) {
+	    strlcpy(status->gcs_message, status_message, 
 		    sizeof(status->gcs_message));
 	} else {
 	    status->gcs_message[0] = '\0';
@@ -1230,12 +1240,12 @@ grpc_c_client_request_sync (grpc_c_client_t *client,
 
     *pcontext = context;
 
-    context->gcc_call = grpc_channel_create_call(client->gcc_channel, 
-						 NULL, 0, 
-						 context->gcc_cq, method, 
-						 client->gcc_host, 
-						 gpr_inf_future(GPR_CLOCK_REALTIME), 
-						 NULL);
+    context->gcc_call 
+	= grpc_channel_create_call(client->gcc_channel, NULL, 0, 
+				   context->gcc_cq, 
+				   grpc_slice_from_static_string(method), 
+				   &client->gcc_host, 
+				   gpr_inf_future(GPR_CLOCK_REALTIME), NULL);
 
     e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
 			      context->gcc_op_count, context, NULL);

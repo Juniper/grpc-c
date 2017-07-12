@@ -175,7 +175,7 @@ grpc_c_context_free (grpc_c_context_t *context)
 
     if (context->gcc_method_funcs) free(context->gcc_method_funcs);
 
-    if (context->gcc_status_details) free(context->gcc_status_details);
+    grpc_slice_unref(context->gcc_status_details);
 
     if (context->gcc_cq) {
 	if (context->gcc_is_client) {

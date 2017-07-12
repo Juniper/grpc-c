@@ -110,7 +110,7 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
 	    gpr_mu_lock(context->gcc_lock);
 
 	    context->gcc_ops[op_count].op = GRPC_OP_RECV_MESSAGE;
-	    context->gcc_ops[op_count].data.recv_message = 
+	    context->gcc_ops[op_count].data.recv_message.recv_message = 
 		&context->gcc_payload;
 
 	    context->gcc_read_event.gce_type = GRPC_C_EVENT_READ;
@@ -212,7 +212,7 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 					&context->gcc_ops_payload[op_count]);
 	}
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
-	context->gcc_ops[op_count].data.send_message 
+	context->gcc_ops[op_count].data.send_message.send_message  
 	    = context->gcc_ops_payload[op_count];
 	context->gcc_op_count++;
 
@@ -357,8 +357,6 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 	= &context->gcc_status;
     context->gcc_ops[op_count].data.recv_status_on_client.status_details 
 	= &context->gcc_status_details;
-    context->gcc_ops[op_count].data.recv_status_on_client.status_details_capacity 
-	= &context->gcc_status_details_capacity;
     op_count++;
 
 
@@ -378,10 +376,9 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 
     if (ev.type == GRPC_OP_COMPLETE && ev.success && status != NULL) {
 	status->gcs_code = context->gcc_status;
-
-	if (context->gcc_status_details_capacity > 0) {
-	    strlcpy(status->gcs_message, context->gcc_status_details, 
-		    sizeof(status->gcs_message));
+	char *status_message  = grpc_slice_to_c_string(context->gcc_status_details);
+	if (status_message) {
+	    strlcpy(status->gcs_message, status_message, sizeof(status->gcs_message));
 	} else {
 	    status->gcs_message[0] = '\0';
 	}
@@ -401,6 +398,7 @@ int
 gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 {
     int op_count = context->gcc_op_count;
+    gpr_slice status_details;
 
     /*
      * If initial metadata is not sent, send inital metadata before sending 
@@ -416,17 +414,19 @@ gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 	return 1;
     }
 
+    status_details = (status->gcs_message == NULL) ? grpc_empty_slice() 
+	: grpc_slice_from_static_string(status->gcs_message);
+
     context->gcc_ops[context->gcc_op_count].op = GRPC_OP_SEND_STATUS_FROM_SERVER;
     context->gcc_status = status->gcs_code;
     context->gcc_ops[context->gcc_op_count].data.send_status_from_server.status 
 	= context->gcc_status;
     context->gcc_ops[context->gcc_op_count].data.send_status_from_server
 	.trailing_metadata_count = 0;
-    context->gcc_ops[context->gcc_op_count].data
-	.send_status_from_server.status_details 
-	= (status->gcs_message != NULL) ? status->gcs_message : "";
-    context->gcc_op_count++;
+    context->gcc_ops[context->gcc_op_count].data.send_status_from_server
+	.status_details = &status_details;  
 
+    context->gcc_op_count++;
     gpr_mu_lock(context->gcc_lock);
     context->gcc_event.gce_type = GRPC_C_EVENT_WRITE_FINISH;
     context->gcc_event.gce_refcount++;

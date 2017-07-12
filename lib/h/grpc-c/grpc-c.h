@@ -237,7 +237,7 @@ struct grpc_c_client_s {
     grpc_completion_queue *gcc_channel_connectivity_cq;
 				    /* Completion queue to receive channel
 				       connectivity change events */
-    char *gcc_host;		    /* Hostname of remote providing RPC 
+    gpr_slice gcc_host;		    /* Hostname of remote providing RPC 
 				       service */
     char *gcc_id;		    /* Client identification string */
     int gcc_channel_state;	    /* Channel connectivity state */
@@ -359,10 +359,8 @@ struct grpc_c_context_s {
     grpc_call *gcc_call;			/* grpc_call for this RPC */
     gpr_mu *gcc_lock;				/* Mutex for access to this cq */
     grpc_status_code gcc_status;		/* Result of RPC execution */
-    char *gcc_status_details;			/* Status details from RPC 
+    grpc_slice gcc_status_details;		/* Status details from RPC 
 						   execution */
-    size_t gcc_status_details_capacity;		/* Size of status details 
-						   buffer */
     grpc_c_method_funcs_t *gcc_method_funcs;	/* Pointer to method functions 
 						   like input/output packer, 
 						   unpacker, free and method 
