@@ -309,101 +309,6 @@ gc_client_request_status (grpc_c_context_t *context)
 }
 
 /*
- * Prepares context with read handler and calls the client callback. Returns 0
- * on success and 1 on failure. Caller of this function will have to assert
- * for success.
- */
-static int
-gc_prepare_client_callback (grpc_c_context_t *context)
-{
-    grpc_c_stream_handler_t *stream_handler;
-    
-    if (context == NULL) {
-	return 0;
-    }
-
-    if (context->gcc_stream == NULL) {
-	stream_handler = malloc(sizeof(grpc_c_stream_handler_t));
-    } else {
-	stream_handler = context->gcc_stream;
-    }
-
-    if (stream_handler == NULL) {
-	return 0;
-    }
-
-    stream_handler->read = &gc_stream_read;
-    stream_handler->write = &gc_stream_write;
-    stream_handler->write_done = &gc_client_stream_write_done;
-    stream_handler->finish = &gc_client_stream_finish;
-
-    context->gcc_stream = stream_handler;
-
-    /*
-     * Invoke callback with read handler if we have data so client can read.
-     */
-    if (context->gcc_method_funcs->gcmf_handler.gcmfh_client == NULL) {
-	/*
-	 * Free context and return failure if there is no client callback. If
-	 * the status is cancelled, it means we have hit timedout sync call
-	 */
-	if (context->gcc_status == GRPC_STATUS_CANCELLED) {
-	    grpc_c_context_free(context);
-	    return 0;
-	} else {
-	    grpc_c_context_free(context);
-	    return 1;
-	}
-    } else if (context->gcc_payload && 
-	       grpc_byte_buffer_length((grpc_byte_buffer *)context->gcc_payload) 
-	       > 0) {
-	/*
-	 * Call client callback if there is data
-	 */
-	context->gcc_method_funcs->gcmf_handler.gcmfh_client(context);
-
-	/*
-	 * If we have a non streaming server or we are done, we do not expect 
-	 * anymore ops. We can safely free context
-	 */
-	if (context->gcc_method->gcm_server_streaming == 0) {
-	    grpc_c_context_free(context);
-	    context = NULL;
-	}
-    } else if (context->gcc_meta_sent == 0) {
-	/*
-	 * We are reusing gcc_meta_sent flag to check if we have requested for
-	 * status. If there is no data (end of output from server) and we
-	 * haven't already requested for status, request for status and set
-	 * gcc_meta_sent flag indicating that we have requested for status in
-	 * case of streaming server
-	 */
-	if (gc_client_request_status(context)) {
-	    grpc_c_context_free(context);
-	    return 1;
-	}
-	context->gcc_meta_sent = 1;
-    } else {
-	/*
-	 * If we don't have data and we have already requested for status 
-	 * and have a valid status, let the callback know
-	 */
-	if (context->gcc_status != GRPC_STATUS_UNAVAILABLE) {
-	    context->gcc_method_funcs->gcmf_handler.gcmfh_client(context);
-	}
-
-	/*
-	 * Free context if we are done
-	 */
-	if (context->gcc_state == GRPC_C_CLIENT_DONE) {
-	    grpc_c_context_free(context);
-	}
-    }
-
-    return 0;
-}
-
-/*
  * On receiving a successful complete op on connectivity cq, this handles
  * connect and disconnect callbacks
  */
@@ -521,7 +426,9 @@ gc_handle_client_event_internal (grpc_completion_queue *cq,
 				 gpr_timespec ts)
 {
     grpc_c_context_t *context;
+    grpc_c_event_t *gcev;
     grpc_c_client_t *client = NULL;
+    gpr_mu *context_lock = NULL;
     grpc_event ev;
     int shutdown = 0, timeout = 0, rc = 0;
 
@@ -531,19 +438,65 @@ gc_handle_client_event_internal (grpc_completion_queue *cq,
 
 	switch (ev.type) {
 	    case GRPC_OP_COMPLETE:
-		context = (grpc_c_context_t *)ev.tag;
+		gcev = (grpc_c_event_t *)ev.tag;
+		context = (grpc_c_context_t *)(gcev->gce_data);
 		if (context) {
 		    client = context->gcc_data.gccd_client;
 		}
+
 		/*
 		 * If the event succesfully completed, let the client handle
-		 * the response. Else silently clean the context
+		 * the response depending on batch type. Else silently clean 
+		 * the context
 		 */
-		if (ev.success) {
-		    GPR_ASSERT(gc_prepare_client_callback(context) == 0);
-		} else if (context) {
-		    grpc_c_context_free(context);
+		if (gcev->gce_type == GRPC_C_EVENT_RPC_INIT) {
+		    grpc_c_stream_handler_t *stream_handler 
+			= context->gcc_stream;
+		    stream_handler->read = &gc_stream_read;
+		    stream_handler->write = &gc_stream_write;
+		    stream_handler->write_done = &gc_client_stream_write_done;
+		    stream_handler->finish = &gc_client_stream_finish;
+
+		    /*
+		     * Create a context lock to syncronize access to this cq
+		     */
+		    context->gcc_lock = malloc(sizeof(gpr_mu));
+		    if (context->gcc_lock == NULL) {
+			gpr_log(GPR_ERROR, "Failed to allocate context lock");
+			break;
+		    }
+		    gpr_mu_init(context->gcc_lock);
+		    context_lock = context->gcc_lock;
+
+		    context->gcc_method_funcs->gcmf_handler
+			.gcmfh_client(context, context->gcc_tag, ev.success);
+		} else if (gcev->gce_type == GRPC_C_EVENT_READ) {
+		    /*
+		     * Our read has resolved. If the user has set a callback, 
+		     * invoke it
+		     */
+		    if (context->gcc_read_resolve_cb) {
+			(context->gcc_read_resolve_cb)
+			    (context, context->gcc_read_resolve_arg, 
+			     ev.success);
+			context->gcc_read_resolve_cb = NULL;
+		    }
+		} else if (gcev->gce_type == GRPC_C_EVENT_WRITE) {
+		    /*
+		     * Our pending write has resolved. We can invoke user 
+		     * provided callback so he can continue writing
+		     */
+		    if (context->gcc_write_resolve_cb) {
+			(context->gcc_write_resolve_cb)
+			    (context, context->gcc_write_resolve_arg, 
+			     ev.success);
+			context->gcc_write_resolve_cb = NULL;
+		    }
+		} else if (gcev->gce_type == GRPC_C_EVENT_WRITE_FINISH) {
 		}
+		gpr_mu_lock(context->gcc_lock);
+		gcev->gce_refcount--;
+		gpr_mu_unlock(context->gcc_lock);
 		break;
 	    case GRPC_QUEUE_SHUTDOWN:
 		grpc_completion_queue_destroy(cq);
@@ -810,7 +763,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
     context->gcc_tag = tag;
 
     /*
-     * We send the message if input is provided.
+     * Allocate ops
      */
     if (grpc_c_ops_alloc(context, 2 + (input ? 1 : 0))) {
 	grpc_c_context_free(context);
@@ -874,6 +827,9 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
      */
     LIST_INSERT_HEAD(&context->gcc_data.gccd_client->gcc_context_list_head, 
 		     context, gcc_list);
+    gpr_mu_lock(&client->gcc_lock);
+    client->gcc_running_cb++;
+    gpr_mu_unlock(&client->gcc_lock);
 
     return context;
 }
@@ -1075,9 +1031,10 @@ grpc_c_client_request_async (grpc_c_client_t *client,
 						 client->gcc_host, 
 						 gpr_inf_future(GPR_CLOCK_REALTIME), 
 						 NULL);
+    context->gcc_event.gce_data = context;
 
     e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
-			      context->gcc_op_count, context, NULL);
+			      context->gcc_op_count, &context->gcc_event, NULL);
 
     if (e == GRPC_CALL_OK) {
 	context->gcc_op_count = 0;

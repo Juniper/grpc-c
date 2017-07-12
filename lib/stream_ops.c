@@ -53,11 +53,11 @@ gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
 
 	if (send) {
 	    gpr_mu_lock(context->gcc_lock);
-	    context->gcc_event->gce_type = GRPC_C_EVENT_METADATA;
-	    context->gcc_event->gce_refcount++;
+	    context->gcc_event.gce_type = GRPC_C_EVENT_METADATA;
+	    context->gcc_event.gce_refcount++;
 	    e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
-				      context->gcc_op_count, context->gcc_event, 
-				      NULL);
+				      context->gcc_op_count, 
+				      &context->gcc_event, NULL);
 	    if (e == GRPC_CALL_OK) {
 		context->gcc_op_count = 0;
 	    } else {
@@ -67,11 +67,11 @@ gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
 		return 1;
 	    }
 
-	    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_event, 
+	    ev = grpc_completion_queue_pluck(context->gcc_cq, &context->gcc_event, 
 					     gpr_inf_future(GPR_CLOCK_REALTIME), 
 					     NULL);
 	    if (ev.type == GRPC_OP_COMPLETE) {
-		context->gcc_event->gce_refcount--;
+		context->gcc_event.gce_refcount--;
 	    }
 	    gpr_mu_unlock(context->gcc_lock);
 
@@ -103,18 +103,9 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
      * Check if we have pending optional payload
      */
     if (context->gcc_payload == NULL) {
-	if (context->gcc_read_event == NULL) {
-	    context->gcc_read_event = malloc(sizeof(grpc_c_event_t));
-	    if (context->gcc_read_event == NULL) {
-		gpr_log(GPR_ERROR, "Failed to create read event");
-		return GRPC_C_FAIL;
-	    }
-	    bzero(context->gcc_read_event, sizeof(grpc_c_event_t));
-	}
-
 	deadline = gc_deadline_from_timeout(timeout);
 
-	if (context->gcc_read_event->gce_refcount == 0) {
+	if (context->gcc_read_event.gce_refcount == 0) {
 	    if (grpc_c_ops_alloc(context, 1)) return 1;
 	    gpr_mu_lock(context->gcc_lock);
 
@@ -122,15 +113,15 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
 	    context->gcc_ops[op_count].data.recv_message = 
 		&context->gcc_payload;
 
-	    context->gcc_read_event->gce_type = GRPC_C_EVENT_READ;
-	    context->gcc_read_event->gce_refcount++;
+	    context->gcc_read_event.gce_type = GRPC_C_EVENT_READ;
+	    context->gcc_read_event.gce_refcount++;
 
 	    grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
 						      context->gcc_ops + op_count, 
-						      1, context->gcc_read_event, 
+						      1, &context->gcc_read_event, 
 						      NULL);
 	    if (e != GRPC_CALL_OK) {
-		context->gcc_read_event->gce_refcount--;
+		context->gcc_read_event.gce_refcount--;
 		gpr_mu_unlock(context->gcc_lock);
 		gpr_log(GPR_ERROR, "Failed to finish read ops batch");
 		return GRPC_C_FAIL;
@@ -138,11 +129,11 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
 	}
 
 	ev = grpc_completion_queue_pluck(context->gcc_cq, 
-					 context->gcc_read_event, 
+					 &context->gcc_read_event, 
 					 deadline, NULL);
 	if (ev.success == 0 && ev.type != GRPC_QUEUE_TIMEOUT) {
 	    gpr_log(GPR_ERROR, "Failed to pluck read ops");
-	    context->gcc_read_event->gce_refcount--;
+	    context->gcc_read_event.gce_refcount--;
 	    gpr_mu_unlock(context->gcc_lock);
 	    return GRPC_C_FAIL;
 	} else if (ev.type == GRPC_QUEUE_TIMEOUT) {
@@ -151,7 +142,7 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
 	    return GRPC_C_TIMEOUT;
 	}
 	context->gcc_op_count = 0;
-	context->gcc_read_event->gce_refcount--;
+	context->gcc_read_event.gce_refcount--;
 	gpr_mu_unlock(context->gcc_lock);
     }
 
@@ -194,8 +185,7 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
     /*
      * If there is a pending write, return early
      */
-    if (context->gcc_write_event 
-	&& context->gcc_write_event->gce_refcount > 0) {
+    if (context->gcc_write_event.gce_refcount > 0) {
 	return GRPC_C_WRITE_PENDING;
     }
 
@@ -207,18 +197,9 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 	return GRPC_C_FAIL;
     }
 
-    if (context->gcc_write_event == NULL) {
-	context->gcc_write_event = malloc(sizeof(grpc_c_event_t));
-	if (context->gcc_write_event == NULL) {
-	    gpr_log(GPR_ERROR, "Failed to create write event");
-	    return GRPC_C_FAIL;
-	}
-	bzero(context->gcc_write_event, sizeof(grpc_c_event_t));
-    }
-
     deadline = gc_deadline_from_timeout(timeout);
 
-    if (context->gcc_write_event->gce_refcount == 0) {
+    if (context->gcc_write_event.gce_refcount == 0) {
 	if (grpc_c_ops_alloc(context, 1)) return GRPC_C_FAIL;
 	gpr_mu_lock(context->gcc_lock);
 
@@ -235,27 +216,27 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 	    = context->gcc_ops_payload[op_count];
 	context->gcc_op_count++;
 
-	context->gcc_write_event->gce_type = GRPC_C_EVENT_WRITE;
-	context->gcc_write_event->gce_refcount++;
+	context->gcc_write_event.gce_type = GRPC_C_EVENT_WRITE;
+	context->gcc_write_event.gce_refcount++;
 	grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
 						  context->gcc_ops, 
 						  context->gcc_op_count, 
-						  context->gcc_write_event, 
+						  &context->gcc_write_event, 
 						  NULL);
 	if (e != GRPC_CALL_OK) {
-	    context->gcc_write_event->gce_refcount--;
+	    context->gcc_write_event.gce_refcount--;
 	    gpr_mu_unlock(context->gcc_lock);
 	    gpr_log(GPR_ERROR, "Failed to finish write ops batch");
 	    return GRPC_C_FAIL;
 	}
     }
 
-    ev = grpc_completion_queue_pluck(context->gcc_cq, context->gcc_write_event, 
-				     deadline, NULL);
+    ev = grpc_completion_queue_pluck(context->gcc_cq, 
+				     &context->gcc_write_event, deadline, NULL);
     if (ev.success == 0 
 	|| (ev.type != GRPC_OP_COMPLETE && ev.type != GRPC_QUEUE_TIMEOUT)) {
 	gpr_log(GPR_ERROR, "Failed to pluck write ops");
-	context->gcc_write_event->gce_refcount--;
+	context->gcc_write_event.gce_refcount--;
 	gpr_mu_unlock(context->gcc_lock);
 	return GRPC_C_FAIL;
     } else if (ev.type == GRPC_QUEUE_TIMEOUT) {
@@ -264,7 +245,7 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 	return GRPC_C_TIMEOUT;
     }
     context->gcc_op_count = 0;
-    context->gcc_write_event->gce_refcount--;
+    context->gcc_write_event.gce_refcount--;
     gpr_mu_unlock(context->gcc_lock);
 
     return GRPC_C_OK;
@@ -291,37 +272,27 @@ gc_client_stream_write_done (grpc_c_context_t *context, long timeout)
     /*
      * If we have already called write_done, return early
      */
-    if (context->gcc_write_done_event 
-	&& context->gcc_write_done_event->gce_refcount > 0) {
+    if (context->gcc_write_done_event.gce_refcount > 0) {
 	gpr_log(GPR_DEBUG, "Called write done from client more than once");
 	return GRPC_C_OK;
     }
 
-    if (context->gcc_write_done_event == NULL) {
-	context->gcc_write_done_event = malloc(sizeof(grpc_c_event_t));
-	if (context->gcc_write_done_event == NULL) {
-	    gpr_log(GPR_ERROR, "Failed to create write done event");
-	    return GRPC_C_FAIL;
-	}
-	bzero(context->gcc_write_done_event, sizeof(grpc_c_event_t));
-    }
-
     deadline = gc_deadline_from_timeout(timeout);
 
-    if (context->gcc_write_done_event->gce_refcount == 0) {
+    if (context->gcc_write_done_event.gce_refcount == 0) {
 	if (grpc_c_ops_alloc(context, 1)) return 1;
 	gpr_mu_lock(context->gcc_lock);
 
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_CLOSE_FROM_CLIENT;
 
-	context->gcc_write_done_event->gce_type = GRPC_C_EVENT_WRITE;
-	context->gcc_write_done_event->gce_refcount++;
+	context->gcc_write_done_event.gce_type = GRPC_C_EVENT_WRITE;
+	context->gcc_write_done_event.gce_refcount++;
 	grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
 						  context->gcc_ops + op_count, 1, 
-						  context->gcc_write_done_event, 
+						  &context->gcc_write_done_event, 
 						  NULL);
 	if (e != GRPC_CALL_OK) {
-	    context->gcc_write_done_event->gce_refcount--;
+	    context->gcc_write_done_event.gce_refcount--;
 	    gpr_mu_unlock(context->gcc_lock);
 	    gpr_log(GPR_ERROR, "Failed to finish write done ops batch");
 	    return GRPC_C_FAIL;
@@ -329,12 +300,12 @@ gc_client_stream_write_done (grpc_c_context_t *context, long timeout)
     }
 
     ev = grpc_completion_queue_pluck(context->gcc_cq, 
-				     context->gcc_write_done_event, 
+				     &context->gcc_write_done_event, 
 				     deadline, NULL);
     if (ev.success == 0 
 	|| (ev.type != GRPC_OP_COMPLETE && ev.type != GRPC_QUEUE_TIMEOUT)) {
 	gpr_log(GPR_ERROR, "Failed to pluck write done ops");
-	context->gcc_write_done_event->gce_refcount--;
+	context->gcc_write_done_event.gce_refcount--;
 	gpr_mu_unlock(context->gcc_lock);
 	return GRPC_C_FAIL;
     } else if (ev.type == GRPC_QUEUE_TIMEOUT) {
@@ -343,7 +314,8 @@ gc_client_stream_write_done (grpc_c_context_t *context, long timeout)
 	return GRPC_C_TIMEOUT;
     }
     context->gcc_op_count = 0;
-    context->gcc_write_done_event->gce_refcount--;
+    context->gcc_write_done_event.gce_refcount--;
+    context->gcc_call_cancelled = 1;
     gpr_mu_unlock(context->gcc_lock);
 
     return GRPC_C_OK;
@@ -359,12 +331,24 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 {
     grpc_event ev;
     grpc_call_error e;
+    int nops;
     int op_count = context->gcc_op_count;
 
-    if (grpc_c_ops_alloc(context, 2)) return 1;
+    /*
+     * If we have not send close from client, we do it when finishing stream
+     */
+    if (context->gcc_call_cancelled == 1) {
+	nops = 1;
+    } else {
+	nops = 2;
+    }
 
-    context->gcc_ops[op_count].op = GRPC_OP_SEND_CLOSE_FROM_CLIENT;
-    op_count++;
+    if (grpc_c_ops_alloc(context, nops)) return 1;
+
+    if (!context->gcc_call_cancelled) {
+	context->gcc_ops[op_count].op = GRPC_OP_SEND_CLOSE_FROM_CLIENT;
+	op_count++;
+    }
 
     context->gcc_ops[op_count].op = GRPC_OP_RECV_STATUS_ON_CLIENT;
     context->gcc_ops[op_count].data.recv_status_on_client.trailing_metadata 
@@ -380,7 +364,7 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 
     gpr_mu_lock(context->gcc_lock);
     e = grpc_call_start_batch(context->gcc_call, context->gcc_ops, 
-			      context->gcc_op_count, context, NULL);
+			      nops, context, NULL);
     if (e == GRPC_CALL_OK) {
 	context->gcc_op_count = 0;
     } else {
@@ -402,6 +386,10 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
 	    status->gcs_message[0] = '\0';
 	}
     }
+
+    gpr_mu_lock(&context->gcc_data.gccd_client->gcc_lock);
+    context->gcc_data.gccd_client->gcc_running_cb--;
+    gpr_mu_unlock(&context->gcc_data.gccd_client->gcc_lock);
 
     return context->gcc_status;
 }
@@ -440,26 +428,17 @@ gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
     context->gcc_op_count++;
 
     gpr_mu_lock(context->gcc_lock);
-    context->gcc_event->gce_type = GRPC_C_EVENT_WRITE_FINISH;
-    context->gcc_event->gce_refcount++;
+    context->gcc_event.gce_type = GRPC_C_EVENT_WRITE_FINISH;
+    context->gcc_event.gce_refcount++;
     grpc_call_error e = grpc_call_start_batch(context->gcc_call, 
 					      context->gcc_ops, 
 					      context->gcc_op_count - op_count, 
-					      context->gcc_event, NULL);
+					      &context->gcc_event, NULL);
     gpr_mu_unlock(context->gcc_lock);
-
-    /*
-     * If we are finishing while we have a write pending, do not mark for
-     * cleanup rightaway
-     */
-    if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
-	context->gcc_cancelled = 1;
-    } else {
-	context->gcc_state = GRPC_C_SERVER_CONTEXT_CLEANUP;
-    }
 
     if (e == GRPC_CALL_OK) {
 	context->gcc_op_count = 0;
+	context->gcc_state = GRPC_C_SERVER_CONTEXT_CLEANUP;
 	return 0;
     } else {
 	gpr_log(GPR_ERROR, "Failed to finish write batch ops");
@@ -472,7 +451,7 @@ gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
  * This function will block caller
  */
 int 
-grpc_c_send_initial_metadata (grpc_c_context_t *context) 
+grpc_c_send_initial_metadata (grpc_c_context_t *context, long timeout UNUSED) 
 {
     return gc_send_initial_metadata_internal(context, 1);
 }

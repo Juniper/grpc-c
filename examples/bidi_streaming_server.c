@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Juniper Networks, Inc.
+ * Copyright (c) 2017, Juniper Networks, Inc.
  * All rights reserved.
  */
 
@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include "foo.grpc-c.h"
+#include "bidi_streaming.grpc-c.h"
 
 static grpc_c_server_t *test_server;
 
@@ -20,46 +20,62 @@ static void sigint_handler (int x) {
  * This function gets invoked whenever say_hello RPC gets called
  */
 void
-foo__greeter__say_hello_cb (grpc_c_context_t *context)
+bidi_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
 {
-    foo__HelloRequest *h;
+    bidi_streaming__HelloRequest *h;
+    int i;
 
-    /*
-     * Read incoming message into h
-     */
-    if (context->gcc_stream->read(context, (void **)&h, -1)) {
-	printf("Failed to read data from client\n");
-	exit(1);
-    }
+    printf("In server callback\n");
 
     /*
      * Create a reply
      */
-    foo__HelloReply r;
-    foo__hello_reply__init(&r);
+    bidi_streaming__HelloReply r;
+    bidi_streaming__hello_reply__init(&r);
 
     char buf[1024];
     buf[0] = '\0';
-    snprintf(buf, 1024, "hello, ");
-    strcat(buf, h->name);
+    snprintf(buf, 1024, "hello client");
     r.message = buf;
 
     /*
-     * Write reply back to the client
+     * Send initial metadata
      */
-    if (!context->gcc_stream->write(context, &r, -1)) {
-        printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
-    } else {
-        printf("Failed to write\n");
-        exit(1);
-    }
+    grpc_c_send_initial_metadata(context, -1);
 
-    grpc_c_status_t status;
-    status.gcs_code = 0;
+    /*
+     * Read client stream first
+     */
+    do {
+	if (!context->gcc_stream->read(context, (void **)&h, -1)) {
+	    if (h) {
+		printf("Received %s from server\n", h->name);
+	    } else {
+		printf("End of input stream\n");
+	    }
+	} else {
+	    printf("Failed to write\n");
+	    exit(1);
+	}
+    } while (h);
+
+    /*
+     * Stream 20 messages to the client
+     */
+    for (i = 0; i < 20; i++) {
+        if (!context->gcc_stream->write(context, &r, -1)) {
+            printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
+        } else {
+            printf("Failed to write\n");
+            exit(1);
+        }
+    }
 
     /*
      * Finish response for RPC
      */
+    grpc_c_status_t status;
+    status.gcs_code = 80;
     if (context->gcc_stream->finish(context, &status)) {
         printf("Failed to write status\n");
         exit(1);
@@ -100,7 +116,7 @@ main (int argc, char **argv)
     /*
      * Initialize greeter service
      */
-    foo__greeter__service_init(test_server);
+    bidi_streaming__greeter__service_init(test_server);
 
     /*
      * Start server

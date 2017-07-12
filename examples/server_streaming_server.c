@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Juniper Networks, Inc.
+ * Copyright (c) 2017, Juniper Networks, Inc.
  * All rights reserved.
  */
 
@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include "foo.grpc-c.h"
+#include "server_streaming.grpc-c.h"
 
 static grpc_c_server_t *test_server;
 
@@ -20,23 +20,24 @@ static void sigint_handler (int x) {
  * This function gets invoked whenever say_hello RPC gets called
  */
 void
-foo__greeter__say_hello_cb (grpc_c_context_t *context)
+server_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
 {
-    foo__HelloRequest *h;
+    server_streaming__HelloRequest *h;
+    int i;
 
     /*
      * Read incoming message into h
      */
-    if (context->gcc_stream->read(context, (void **)&h, -1)) {
-	printf("Failed to read data from client\n");
+    if (context->gcc_stream->read(context, (void **)&h, 0)) {
+	printf("Failed to read input from client\n");
 	exit(1);
     }
 
     /*
      * Create a reply
      */
-    foo__HelloReply r;
-    foo__hello_reply__init(&r);
+    server_streaming__HelloReply r;
+    server_streaming__hello_reply__init(&r);
 
     char buf[1024];
     buf[0] = '\0';
@@ -45,21 +46,22 @@ foo__greeter__say_hello_cb (grpc_c_context_t *context)
     r.message = buf;
 
     /*
-     * Write reply back to the client
+     * Stream 20 messages to the client
      */
-    if (!context->gcc_stream->write(context, &r, -1)) {
-        printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
-    } else {
-        printf("Failed to write\n");
-        exit(1);
+    for (i = 0; i < 20; i++) {
+	if (!context->gcc_stream->write(context, &r, -1)) {
+	    printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
+	} else {
+	    printf("Failed to write\n");
+	    exit(1);
+	}
     }
-
-    grpc_c_status_t status;
-    status.gcs_code = 0;
 
     /*
      * Finish response for RPC
      */
+    grpc_c_status_t status;
+    status.gcs_code = 0;
     if (context->gcc_stream->finish(context, &status)) {
         printf("Failed to write status\n");
         exit(1);
@@ -100,7 +102,7 @@ main (int argc, char **argv)
     /*
      * Initialize greeter service
      */
-    foo__greeter__service_init(test_server);
+    server_streaming__greeter__service_init(test_server);
 
     /*
      * Start server

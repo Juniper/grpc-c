@@ -90,8 +90,7 @@ grpc_c_register_method (grpc_c_server_t *server, const char *method,
 {
     void *tag = grpc_server_register_method(server->gcs_server, method, 
 					    server->gcs_host, 
-					    GRPC_SRM_PAYLOAD_READ_INITIAL_BYTE_BUFFER, 
-					    0);
+					    GRPC_SRM_PAYLOAD_NONE, 0);
     if (tag == NULL) {
 	gpr_log(GPR_ERROR, "Failed to register method %s", method);
 	return 1;
@@ -141,33 +140,21 @@ gc_register_grpc_method (grpc_c_server_t *server, struct grpc_c_method_t *np)
     grpc_call_error e;
 
     /*
-     * Create a event that gets returned when this method is called
-     */
-    grpc_c_event_t *gcev = malloc(sizeof(grpc_c_event_t));
-    if (gcev == NULL) {
-	gpr_log(GPR_ERROR, "Failed to create memory for grpc-c event");
-	return 1;
-    }
-    bzero(gcev, sizeof(grpc_c_event_t));
-
-    /*
      * Create a context that gets returned when this is method is called
      */
     grpc_c_context_t *context = grpc_c_context_init(np, 0);
     if (context == NULL) {
 	gpr_log(GPR_ERROR, "Failed to create context before starting server");
-	free(gcev);
 	return 1;
     }
 
-    gcev->gce_type = GRPC_C_EVENT_RPC_INIT;
-    gcev->gce_data = context;
+    context->gcc_event.gce_type = GRPC_C_EVENT_RPC_INIT;
+    context->gcc_event.gce_data = context;
 
     context->gcc_cq = grpc_completion_queue_create(NULL);
     grpc_c_grpc_set_cq_callback(context->gcc_cq, gc_handle_server_event);
     context->gcc_data.gccd_server = server;
     context->gcc_state = GRPC_C_SERVER_CALLBACK_WAIT;
-    context->gcc_event = gcev;
 
     server->gcs_contexts[np->gcm_method_id] = context;
 
@@ -178,17 +165,17 @@ gc_register_grpc_method (grpc_c_server_t *server, struct grpc_c_method_t *np)
 						&context->gcc_call, 
 						&context->gcc_deadline, 
 						context->gcc_metadata, 
-						&context->gcc_payload, 
+						NULL, 
 						context->gcc_cq, 
 						server->gcs_cq, 
-						context->gcc_event);
+						&context->gcc_event);
 
 	if (e != GRPC_CALL_OK) {
 	    grpc_c_context_free(context);
 	    gpr_log(GPR_ERROR, "Failed to register call: %d", e);
 	    return 1;
 	}
-	gcev->gce_refcount++;
+	context->gcc_event.gce_refcount++;
     }
 
     return 0;
@@ -260,39 +247,13 @@ gc_prepare_server_callback (grpc_c_context_t *context)
     rc = gc_reregister_method(server, method_id);
 
     /*
-     * Allocate memory for read and write events
-     */
-    context->gcc_read_event = malloc(sizeof(grpc_c_event_t));
-    if (context->gcc_read_event == NULL) {
-	gpr_log(GPR_ERROR, "Failed to allocate memory for read event");
-	grpc_c_context_free(context);
-	return 1;
-    }
-    bzero(context->gcc_read_event, sizeof(grpc_c_event_t));
-
-    context->gcc_write_event = malloc(sizeof(grpc_c_event_t));
-    if (context->gcc_write_event == NULL) {
-	grpc_c_context_free(context);
-	gpr_log(GPR_ERROR, "Failed to allocate memory for write event");
-	return 1;
-    }
-    bzero(context->gcc_write_event, sizeof(grpc_c_event_t));
-
-    /*
      * Start a batch operation so we know when the call is cancelled either
      * because of client disconnection or deliberate client cancel. SAve this
      * grpc_c_event in context so we can query it if needed
      */
-    grpc_c_event_t *gcev = malloc(sizeof(grpc_c_event_t));
-    if (gcev == NULL) {
-	gpr_log(GPR_ERROR, "Failed to allocate memory for grpc-c event");
-	return 1;
-    }
-    bzero(gcev, sizeof(grpc_c_event_t));
-
+    grpc_c_event_t *gcev = &context->gcc_recv_close_event;
     gcs_rc_data = malloc(sizeof(gcs_recv_close_data_t));
     if (gcs_rc_data == NULL) {
-	free(gcev);
 	gpr_log(GPR_ERROR, "Failed to allocate memory for event data");
 	return 1;
     }
@@ -314,11 +275,9 @@ gc_prepare_server_callback (grpc_c_context_t *context)
 
     if (e != GRPC_CALL_OK) {
 	gpr_log(GPR_ERROR, "Failed to start batch for RECV_CLOSE");
-	free(gcev);
 	free(gcs_rc_data);
 	return 1;
     }
-    context->gcc_recv_close_event = gcev;
 
     /*
      * Call the service handler
@@ -416,7 +375,7 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 	 * We have successfully finished sending write finish ops, we can go
 	 * ahead cleanup the context. Otherwise try resending write finish ops 
 	 */
-	if (success || context->gcc_cancelled) {
+	if (success || context->gcc_call_cancelled) {
 	    context->gcc_state == GRPC_C_SERVER_CONTEXT_NOOP;
 	    grpc_c_server_t *server = context->gcc_data.gccd_server;
 	    gpr_mu_lock(&server->gcs_lock);
@@ -424,10 +383,8 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 	    /*
 	     * Unref context from recv close event
 	     */
-	    if (context->gcc_recv_close_event) {
-		((gcs_recv_close_data_t *)
-		 (context->gcc_recv_close_event->gce_data))->context = NULL;
-	    }
+	    ((gcs_recv_close_data_t *)
+	     (context->gcc_recv_close_event.gce_data))->context = NULL;
 	    grpc_c_context_free(context);
 	    server->gcs_running_cb--;
 	    if (gc_trace) {
@@ -447,54 +404,6 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 	    status.gcs_code = context->gcc_status;
 	    bzero(status.gcs_message, sizeof(status.gcs_message));
 	    gc_server_stream_finish(context, &status);
-	}
-    } else if (context->gcc_state == GRPC_C_WRITE_DATA_START) {
-	/*
-	 * Our previous write was pending and is finished now. Call
-	 * registered user callback if he registered one
-	 */
-	context->gcc_state = GRPC_C_WRITE_DATA_DONE;
-	/*
-	 * If we have cancelled flag set, this means we are now resolving
-	 * pending write and have called finish already. Do not call write
-	 * resolve callback
-	 */
-	if (context->gcc_cancelled == 1) {
-	    context->gcc_state = GRPC_C_SERVER_CONTEXT_NOOP;
-	    grpc_c_server_t *server = context->gcc_data.gccd_server;
-	    gpr_mu_lock(&server->gcs_lock);
-	    /*
-	     * Unref context from recv close event
-	     */
-	    if (context->gcc_recv_close_event) {
-		((gcs_recv_close_data_t *)
-		 (context->gcc_recv_close_event->gce_data))->context = NULL;
-	    }
-	    grpc_c_context_free(context);
-	    server->gcs_running_cb--;
-	    if (gc_trace) {
-		gpr_log(GPR_DEBUG, "Decrementing server running callbacks"
-			" - %d\n", server->gcs_running_cb);
-	    }
-	    gpr_mu_unlock(&server->gcs_lock);
-
-	    /*
-	     * If we are shutting down and finished all our callbacks, signal
-	     * shutdown condition variable so we can finish destroying the
-	     * server
-	     */
-	    if (server->gcs_running_cb == 0 && server->gcs_shutdown) {
-		gpr_cv_signal(&server->gcs_shutdown_cv);
-	    }
-	} else if (context->gcc_writer_resolve_cb) {
-	    grpc_c_writer_resolve_callback_t *cb 
-		= context->gcc_writer_resolve_cb;
-	    void *cb_args = context->gcc_writer_resolve_args;
-
-	    context->gcc_writer_resolve_cb = NULL;
-	    context->gcc_writer_resolve_args = NULL;
-
-	    cb(context, cb_args);
 	}
     }
 }
@@ -544,88 +453,95 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 		if (gcev->gce_type == GRPC_C_EVENT_RECV_CLOSE) {
 		    context = ((gcs_recv_close_data_t *)gcev->gce_data)->context;
 		    if (context) {
-			context->gcc_cancelled = 1;
-			context->gcc_recv_close_event = NULL;
+			context->gcc_call_cancelled = 1;
 		    }
 		    free(gcev->gce_data);
-		    free(gcev);
-		    break;
-		}
-
-		/*
-		 * Call the complete operation handler
-		 */
-		context = (grpc_c_context_t *)gcev->gce_data;
-		if (context == NULL || context->gcc_data.gccd_server == NULL) {
-		    break;
-		} else if (cq == context->gcc_data.gccd_server->gcs_cq 
-			   && ev.success == 0) {
+		    gcev->gce_data = NULL;
+		} else if (gcev->gce_type == GRPC_C_EVENT_READ) {
 		    /*
-		     * If we received a failed event from server cq, it
-		     * probably means we are shutting down
+		     * Our read has resolved. If the user has set a 
+		     * callback, invoke it
 		     */
-		    continue;
-		} else if (grpc_c_get_thread_pool() != NULL) {
-		    cq = context->gcc_cq;
-		}
-
-		/*
-		 * If we are threaded and our rpc just got resolved, schedule
-		 * call for next rpc before processing this
-		 */
-		if (resolved == 0 && grpc_c_get_thread_pool() != NULL 
-		    && !context->gcc_data.gccd_server->gcs_shutdown) {
-		    gc_schedule_callback(server_cq, server);
-		    resolved = 1;
-		}
-
-		state = context->gcc_state;
-		if (state == GRPC_C_SERVER_CALLBACK_WAIT 
-		    && !context->gcc_data.gccd_server->gcs_shutdown 
-		    && ev.success == 1) {
-		    gpr_mu_lock(&context->gcc_data.gccd_server->gcs_lock);
-		    context->gcc_data.gccd_server->gcs_running_cb++;
-		    if (gc_trace) {
-			gpr_log(GPR_DEBUG, "Incrementing running callbacks on "
-				"server - %d", 
-				context->gcc_data.gccd_server->gcs_running_cb);
+		    context = (grpc_c_context_t *)gcev->gce_data;
+		    if (context && context->gcc_read_resolve_cb) {
+			(context->gcc_read_resolve_cb)
+			    (context, context->gcc_read_resolve_arg, 
+			     ev.success);
+			context->gcc_read_resolve_cb = NULL;
 		    }
-		    gpr_mu_unlock(&context->gcc_data.gccd_server->gcs_lock);
-
+		} else if (gcev->gce_type == GRPC_C_EVENT_WRITE) {
 		    /*
-		     * Create a context lock to syncronize access to this cq
+		     * Our previous write has resolved. We can invoke user 
+		     * provided callback so he can continue writing
 		     */
-		    context->gcc_lock = malloc(sizeof(gpr_mu));
-		    if (context->gcc_lock == NULL) {
-			gpr_log(GPR_ERROR, "Failed to allocate context lock");
+		    context = (grpc_c_context_t *)gcev->gce_data;
+		    if (context && context->gcc_write_resolve_cb) {
+			(context->gcc_write_resolve_cb)
+			    (context, context->gcc_write_resolve_arg, 
+			     ev.success);
+			context->gcc_write_resolve_cb = NULL;
+		    }
+		} else if (gcev->gce_type == GRPC_C_EVENT_RPC_INIT) {
+		    /*
+		     * Prepare and invoke rpc callback
+		     */
+		    context = (grpc_c_context_t *)gcev->gce_data;
+		    if (context == NULL 
+			|| context->gcc_data.gccd_server == NULL) {
+			gpr_log(GPR_ERROR, "Invalid context for rpc");
 			break;
+		    } else if (grpc_c_get_thread_pool() != NULL) {
+			/*
+			 * If we are event/task based, we get the initial 
+			 * complete event on server cq. Switch to call cq so 
+			 * we can pull further rpc related events
+			 */
+			cq = context->gcc_cq;
 		    }
-		    gpr_mu_init(context->gcc_lock);
-		    context_lock = context->gcc_lock;
-		}
 
-		/*
-		 * If we just resolved because of server shutdown, don't
-		 * handle the RPC
-		 */
-		if (!(state == GRPC_C_SERVER_CALLBACK_WAIT 
-		    && context->gcc_data.gccd_server->gcs_shutdown 
-		    && ev.success == 0)) {
+		    /*
+		     * If we are threaded and our rpc just got resolved, 
+		     * schedule call for next rpc before processing this
+		     */
+		    if (resolved == 0 && grpc_c_get_thread_pool() != NULL 
+			&& !context->gcc_data.gccd_server->gcs_shutdown) {
+			gc_schedule_callback(server_cq, server);
+			resolved = 1;
+		    }
+
+		    state = context->gcc_state;
+		    if (ev.success && state == GRPC_C_SERVER_CALLBACK_WAIT 
+			&& !context->gcc_data.gccd_server->gcs_shutdown) {
+			gpr_mu_lock(&context->gcc_data.gccd_server->gcs_lock);
+			context->gcc_data.gccd_server->gcs_running_cb++;
+			if (gc_trace) {
+			    gpr_log(GPR_DEBUG, "Incrementing running "
+				    "callbacks on server - %d", 
+				    context->gcc_data.gccd_server->gcs_running_cb);
+			}
+			gpr_mu_unlock(&context->gcc_data.gccd_server->gcs_lock);
+
+			/*
+			 * Create a context lock to syncronize access to 
+			 * this cq
+			 */
+			context->gcc_lock = malloc(sizeof(gpr_mu));
+			if (context->gcc_lock == NULL) {
+			    gpr_log(GPR_ERROR, "Failed to allocate context lock");
+			    break;
+			}
+			gpr_mu_init(context->gcc_lock);
+			context_lock = context->gcc_lock;
+		    }
+
+		    /*
+		     * Handle complete op
+		     */
 		    gc_handle_server_complete_op(context, ev.success);
 		}
-
-		/*
-		 * Decrement refcount for this event and free if we are done
-		 */
-		if (context_lock) gpr_mu_lock(context_lock);
+		gpr_mu_lock(context->gcc_lock);
 		gcev->gce_refcount--;
-		if (context_lock) gpr_mu_unlock(context_lock);
-
-		if (gcev->gce_type == GRPC_C_EVENT_CLEANUP 
-		    && gcev->gce_refcount == 0) {
-		    if (gcev->gce_data) free(gcev->gce_data);
-		    free(gcev);
-		}
+		gpr_mu_unlock(context->gcc_lock);
 		break;
 	    case GRPC_QUEUE_SHUTDOWN:
 		grpc_completion_queue_destroy(cq);
@@ -939,19 +855,16 @@ grpc_c_context_is_call_cancelled (grpc_c_context_t *context)
      */
     if (context->gcc_is_client) return 0;
 
-    if (context->gcc_recv_close_event == NULL) return 1;
-
     gpr_mu_lock(context->gcc_lock);
     ev = grpc_completion_queue_pluck(context->gcc_cq, 
-				     context->gcc_recv_close_event, deadline, 
+				     &context->gcc_recv_close_event, deadline, 
 				     NULL);
     gpr_mu_unlock(context->gcc_lock);
 
     if (ev.type == GRPC_OP_COMPLETE) {
-	context->gcc_cancelled = 1;
-	free(context->gcc_recv_close_event->gce_data);
-	free(context->gcc_recv_close_event);
-	context->gcc_recv_close_event = NULL;
+	context->gcc_call_cancelled = 1;
+	free(context->gcc_recv_close_event.gce_data);
+	context->gcc_recv_close_event.gce_data = NULL;
 	return ev.success;
     }
 

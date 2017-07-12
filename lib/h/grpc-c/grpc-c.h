@@ -264,13 +264,20 @@ struct grpc_c_client_s {
 /*
  * Signature for client callback
  */
-typedef void (grpc_c_client_callback_t)(grpc_c_context_t *context);
+typedef void (grpc_c_client_callback_t)(grpc_c_context_t *context, void *data, 
+					int success);
+
+/*
+ * Signature for read pending callback
+ */
+typedef void (grpc_c_read_resolve_callback_t)(grpc_c_context_t *context, 
+					      void *data, int success);
 
 /*
  * Signature for write pending callback
  */
-typedef void (grpc_c_writer_resolve_callback_t)(grpc_c_context_t *context, 
-						void *data);
+typedef void (grpc_c_write_resolve_callback_t)(grpc_c_context_t *context, 
+					       void *data, int success);
 
 /*
  * Initialize a client with client_id to server_name. We build unix domain
@@ -369,26 +376,33 @@ struct grpc_c_context_s {
     grpc_c_stream_handler_t *gcc_stream;	/* Handle to IO stream. Users 
 						   can use this handle to 
 						   read/write into the call */
-    grpc_c_writer_resolve_callback_t *gcc_writer_resolve_cb;
+    grpc_c_read_resolve_callback_t *gcc_read_resolve_cb;
+						/* Read callback that can be
+						   called when pending read is
+						   finished */
+    void *gcc_read_resolve_arg;			/* Data that can be passed to 
+						   when calling read resolve 
+						   cb */
+    grpc_c_write_resolve_callback_t *gcc_write_resolve_cb;
 						/* Write callback that can be 
 						   called when a pending write 
 						   is finished */
-    void *gcc_writer_resolve_args;		/* Identifying data that can 
+    void *gcc_write_resolve_arg;		/* Identifying data that can 
 						   be passed to user provided 
 						   callback when a write is 
 						   finished */
-    int gcc_cancelled;				/* Boolean indicating that 
+    int gcc_call_cancelled;			/* Boolean indicating that 
 						   call has been cancelled */
     int gcc_client_cancel;			/* Boolean indicating if 
 						   client has cancelled the 
 						   call */
-    grpc_c_event_t *gcc_event;			/* grpc-c event this context 
+    grpc_c_event_t gcc_event;			/* grpc-c event this context 
 						   belongs to */
-    grpc_c_event_t *gcc_read_event;		/* Event tag for read ops */
-    grpc_c_event_t *gcc_write_event;		/* Event tag for write ops */
-    grpc_c_event_t *gcc_write_done_event;	/* Event tag for write done 
+    grpc_c_event_t gcc_read_event;		/* Event tag for read ops */
+    grpc_c_event_t gcc_write_event;		/* Event tag for write ops */
+    grpc_c_event_t gcc_write_done_event;	/* Event tag for write done 
 						   from client */
-    grpc_c_event_t *gcc_recv_close_event;	/* Recv close grpc-c event in 
+    grpc_c_event_t gcc_recv_close_event;	/* Recv close grpc-c event in 
 						   case of server context */
     union {					/* Union containing client or 
 						   server object */
@@ -410,12 +424,22 @@ typedef struct grpc_c_status_s {
  * Function to set write resolve callback and args
  */
 static inline void 
-grpc_c_set_writer_done (grpc_c_context_t *context, 
-			grpc_c_writer_resolve_callback_t *cb, void *data) 
+grpc_c_set_write_done (grpc_c_context_t *context, 
+		       grpc_c_write_resolve_callback_t *cb, void *data) 
 {
     if (context != NULL) {
-	context->gcc_writer_resolve_cb = cb;
-	context->gcc_writer_resolve_args = data;
+	context->gcc_write_resolve_cb = cb;
+	context->gcc_write_resolve_arg = data;
+    }
+}
+
+static inline void 
+grpc_c_set_read_done (grpc_c_context_t *context, 
+		      grpc_c_read_resolve_callback_t *cb, void *data)
+{
+    if (context != NULL) {
+	context->gcc_read_resolve_cb = cb;
+	context->gcc_read_resolve_arg = data;
     }
 }
 
@@ -708,7 +732,7 @@ grpc_c_add_trailing_metadata (grpc_c_context_t *context, const char *key,
  * receiver. If this is not called, all the added initial metadata will be
  * sent upon first write from server
  */
-int grpc_c_send_initial_metadata (grpc_c_context_t *context);
+int grpc_c_send_initial_metadata (grpc_c_context_t *context, long timeout);
 
 /*
  * Get client-id from context

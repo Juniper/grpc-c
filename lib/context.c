@@ -66,6 +66,17 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
 	context->gcc_is_client = 1;
     }
 
+    /*
+     * Allocate memory for stream handler
+     */
+    context->gcc_stream = malloc(sizeof(grpc_c_stream_handler_t));
+    if (context->gcc_stream == NULL) {
+	gpr_log(GPR_ERROR, "Failed to allocate memory for stream handler");
+	grpc_c_context_free(context);
+	return NULL;
+    }
+    bzero(context->gcc_stream, sizeof(grpc_c_stream_handler_t));
+
     return context;
 }
 
@@ -196,16 +207,25 @@ grpc_c_context_free (grpc_c_context_t *context)
     if (context->gcc_payload) grpc_byte_buffer_destroy(context->gcc_payload);
 
     /*
-     * Mark event tag corresponding to this context for cleanup
+     * Event types when batching operations
      */
+    context->gcc_event.gce_type = GRPC_C_EVENT_RPC_INIT;
+    context->gcc_read_event.gce_type = GRPC_C_EVENT_READ;
+    context->gcc_write_event.gce_type = GRPC_C_EVENT_WRITE;
+    context->gcc_write_done_event.gce_type = GRPC_C_EVENT_WRITE_FINISH;
+    context->gcc_recv_close_event.gce_type = GRPC_C_EVENT_RECV_CLOSE;
+
+    /*
+     * Mark event tag corresponding to this context for cleanup
     if (context->gcc_event) {
 	if (context->gcc_state == GRPC_C_SERVER_CALLBACK_WAIT) {
 	    free(context->gcc_event);
 	} else {
 	    context->gcc_event->gce_type = GRPC_C_EVENT_CLEANUP;
-	    context->gcc_event->gce_data = NULL;
+	    context->gcc_event.gce_data = NULL;
 	}
     }
+     */
 
     free(context);
 }
