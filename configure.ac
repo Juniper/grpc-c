@@ -29,6 +29,8 @@ AC_CONFIG_FILES([
     compiler/Makefile
     examples/Makefile
     lib/Makefile
+    test/Makefile
+    test/end2end/Makefile
     Makefile
 ])
 

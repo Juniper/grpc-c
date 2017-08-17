@@ -126,6 +126,7 @@ typedef enum grpc_c_event_type_s {
     GRPC_C_EVENT_READ_FINISH,
     GRPC_C_EVENT_WRITE_FINISH,
     GRPC_C_EVENT_RECV_CLOSE,
+    GRPC_C_EVENT_SERVER_SHUTDOWN,
 } grpc_c_event_type_t;
 
 /*
@@ -590,6 +591,9 @@ struct grpc_c_server_s {
 					       grpc_c_server_wait() can 
 					       consume */
     int *gcs_callback_running_cb;	    /* Shadow running callback count */
+    int gcs_cq_shutdown;		    /* Boolean to indicate that server 
+					       completion queue has shutdown */
+    grpc_c_event_t gcs_shutdown_event;	    /* Event signalling server shutdown */
 };
 
 /*
@@ -610,6 +614,13 @@ grpc_c_server_t *
 grpc_c_server_create (const char *name, 
 		      grpc_server_credentials *creds, 
 		      grpc_channel_args *args);
+
+/*
+ * Create a server object with given address
+ */
+grpc_c_server_t *
+grpc_c_server_create_by_host (char *addr, grpc_server_credentials *creds, 
+			      grpc_channel_args *args);
 
 /*
  * Destroy and free grpc-c server

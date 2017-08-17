@@ -339,6 +339,18 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 		gc_reregister_method(context->gcc_data.gccd_server, 
 				     context->gcc_method->gcm_method_id);
 	    }
+
+	    /*
+	     * Remove this context from server's context list and free right
+	     * away
+	     */
+	    if (context && context->gcc_data.gccd_server) {
+		grpc_c_server_t *server = context->gcc_data.gccd_server;
+		int method_id = context->gcc_method->gcm_method_id;
+		if (server->gcs_contexts[method_id] == context) {
+		    server->gcs_contexts[method_id] = NULL;
+		}
+	    }
 	    grpc_c_context_free(context);
 	    return;
 	}
@@ -383,8 +395,10 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 	    /*
 	     * Unref context from recv close event
 	     */
-	    ((gcs_recv_close_data_t *)
-	     (context->gcc_recv_close_event.gce_data))->context = NULL;
+	    if (context->gcc_recv_close_event.gce_data) {
+		((gcs_recv_close_data_t *)
+		 (context->gcc_recv_close_event.gce_data))->context = NULL;
+	    }
 	    grpc_c_context_free(context);
 	    server->gcs_running_cb--;
 	    if (gc_trace) {
@@ -481,7 +495,8 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 			     ev.success);
 			context->gcc_write_resolve_cb = NULL;
 		    }
-		} else if (gcev->gce_type == GRPC_C_EVENT_RPC_INIT) {
+		} else if (gcev->gce_type == GRPC_C_EVENT_RPC_INIT 
+			   || gcev->gce_type == GRPC_C_EVENT_WRITE_FINISH) {
 		    /*
 		     * Prepare and invoke rpc callback
 		     */
@@ -490,13 +505,16 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 			|| context->gcc_data.gccd_server == NULL) {
 			gpr_log(GPR_ERROR, "Invalid context for rpc");
 			break;
-		    } else if (grpc_c_get_thread_pool() != NULL) {
+		    } else if (grpc_c_get_thread_pool() != NULL && ev.success) {
 			/*
 			 * If we are event/task based, we get the initial 
 			 * complete event on server cq. Switch to call cq so 
 			 * we can pull further rpc related events
 			 */
-			cq = context->gcc_cq;
+			if (gcev->gce_type == GRPC_C_EVENT_WRITE_FINISH 
+			    || ev.success) {
+			    cq = context->gcc_cq;
+			}
 		    }
 
 		    /*
@@ -538,10 +556,12 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 		     * Handle complete op
 		     */
 		    gc_handle_server_complete_op(context, ev.success);
+		} else if (gcev->gce_type == GRPC_C_EVENT_SERVER_SHUTDOWN) {
+		    gpr_log(GPR_DEBUG, "Server shutdown complete");
 		}
-		gpr_mu_lock(context->gcc_lock);
+		if (context && context->gcc_lock) gpr_mu_lock(context->gcc_lock);
 		gcev->gce_refcount--;
-		gpr_mu_unlock(context->gcc_lock);
+		if (context && context->gcc_lock) gpr_mu_unlock(context->gcc_lock);
 		break;
 	    case GRPC_QUEUE_SHUTDOWN:
 		grpc_completion_queue_destroy(cq);
@@ -550,9 +570,14 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 		 * destroy and notify gcs_cq_desctroy_cv so grpc_c_server_wait
 		 * can proceed to destroy server and shutdown grpc
 		 */
+		gpr_log(GPR_DEBUG, "We have a shutdown event here %p", cq);
 		if (grpc_c_get_thread_pool() != NULL && server 
 		    && server->gcs_cq == cq) {
+		    gpr_log(GPR_DEBUG, "We have a server shutdown event here %p", cq);
+		    gpr_mu_lock(&server->gcs_lock);
+		    server->gcs_cq_shutdown = 1;
 		    gpr_cv_broadcast(&server->gcs_cq_destroy_cv);
+		    gpr_mu_unlock(&server->gcs_lock);
 		}
 
 		/*
@@ -763,6 +788,7 @@ gc_server_create_internal (const char *host, grpc_server_credentials *creds,
     grpc_c_grpc_set_cq_callback(server->gcs_cq, gc_handle_server_event);
     server->gcs_server = grpc_server_create(args, NULL);
     server->gcs_host = strdup(host);
+    server->gcs_shutdown_event.gce_type = GRPC_C_EVENT_SERVER_SHUTDOWN;
     gpr_mu_init(&server->gcs_lock);
     gpr_cv_init(&server->gcs_cq_destroy_cv);
     gpr_cv_init(&server->gcs_shutdown_cv);
@@ -810,6 +836,20 @@ grpc_c_server_create (const char *name, grpc_server_credentials *creds,
     }
     
     return gc_server_create_internal(buf, creds, args);
+}
+
+/*
+ * Creates a grpc-c server with provided address
+ */
+grpc_c_server_t *
+grpc_c_server_create_by_host (char *addr, grpc_server_credentials *creds, 
+			      grpc_channel_args *args)
+{
+    if (addr == NULL) {
+	return NULL;
+    }
+
+    return gc_server_create_internal(addr, creds, args);
 }
 
 /*
@@ -898,8 +938,10 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 	if (server->gcs_host) free(server->gcs_host);
 
 	if (server->gcs_server) {
+	    server->gcs_shutdown_event.gce_refcount++;
 	    grpc_server_shutdown_and_notify(server->gcs_server, 
-					    server->gcs_cq, NULL);
+					    server->gcs_cq, 
+					    &server->gcs_shutdown_event);
 	}
 
 	if (server->gcs_cq) {
@@ -915,9 +957,12 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 		}
 		grpc_completion_queue_destroy(server->gcs_cq);
 	    } else if (server->gcs_server) {
+		gpr_log(GPR_DEBUG, "Waiting for server destroy cv");
 		gpr_mu_lock(&server->gcs_lock);
-		gpr_cv_wait(&server->gcs_cq_destroy_cv, &server->gcs_lock, 
-			    gpr_inf_future(GPR_CLOCK_REALTIME));
+		while (server->gcs_cq_shutdown == 0) {
+		    gpr_cv_wait(&server->gcs_cq_destroy_cv, &server->gcs_lock, 
+				gpr_inf_future(GPR_CLOCK_REALTIME));
+		}
 		grpc_server_destroy(server->gcs_server);
 		gpr_mu_unlock(&server->gcs_lock);
 	    }
@@ -929,9 +974,11 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 	if (server->gcs_method_funcs) {
 	    for (i = 0; i < server->gcs_method_count; i++) {
 		free(server->gcs_method_funcs[i].gcmf_name);
-		grpc_completion_queue_shutdown(server->gcs_contexts[i]->gcc_cq);
-		grpc_completion_queue_destroy(server->gcs_contexts[i]->gcc_cq);
-		grpc_c_context_free(server->gcs_contexts[i]);
+		if (server->gcs_contexts[i]) {
+		    grpc_completion_queue_shutdown(server->gcs_contexts[i]->gcc_cq);
+		    grpc_completion_queue_destroy(server->gcs_contexts[i]->gcc_cq);
+		    grpc_c_context_free(server->gcs_contexts[i]);
+		}
 	    }
 	    free(server->gcs_method_funcs);
 	    free(server->gcs_contexts);

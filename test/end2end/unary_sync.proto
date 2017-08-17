@@ -1,0 +1,20 @@
+//
+// Copyright (c) 2017, Juniper Networks, Inc.
+// All rights reserved.
+//
+
+syntax = "proto3";
+
+package unary_sync;
+
+service Greeter {
+    rpc SayHello (HelloRequest) returns (HelloReply) {}
+}
+
+message HelloRequest {
+    string name = 1;
+}
+
+message HelloReply {
+    string message = 1;
+}

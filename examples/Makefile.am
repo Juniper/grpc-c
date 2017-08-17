@@ -4,6 +4,8 @@
 #
 
 HOSTPROG=yes
+PROTOC = protoc
+PROTOS = `ls -1 ${srcdir}/*.proto`
 
 bin_PROGRAMS = \
     foo_client \
@@ -104,6 +106,13 @@ client_streaming.grpc-c.c client_streaming.grpc-c.h client_streaming.grpc-c.serv
 	protoc -I ${srcdir} --grpc-c_out=. \
 		--plugin=protoc-gen-grpc-c=../compiler/protoc-gen-grpc-c \
 	    ${srcdir}/client_streaming.proto
+
+gencode:
+	@(for protofile in ${PROTOS} ; do \
+	    ${PROTOC} -I ${srcdir} --grpc-c_out=. \
+	    --plugin=protoc-gen-grpc-c=../compiler/protoc-gen-grpc-c \
+	    $$protofile; \
+	done)
 
 LDADD = \
     ../lib/libgrpc-c.la \
