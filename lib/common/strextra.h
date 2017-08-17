@@ -18,6 +18,8 @@
 #include <common/aux_types.h>
 #include <common/env.h>
 
+#include <grpc/support/alloc.h>
+
 /*
  * Use C linkage when using a C++ compiler
  */
@@ -359,7 +361,7 @@ strlcmp (const char *leading, const char *compare, int allow_null)
 static inline void *
 memdup (const void *buf, size_t size)
 {
-    void *vp = malloc(size);
+    void *vp = gpr_malloc(size);
     if (vp) memcpy(vp, buf, size);
     return vp;
 }

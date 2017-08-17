@@ -9,6 +9,8 @@
 #include "config.h"
 #include <common/strextra.h>
 
+#include <grpc/support/alloc.h>
+
 #ifndef HAVE_STRNDUP
 /*
  * strndup(): strdup() meets strncat(); return a duplicate string
@@ -21,7 +23,7 @@ strndup (const char *str, size_t count)
     else {
 	size_t slen = strlen(str);
 	size_t len = (count < slen) ? count : slen;
-	char *cp = (char *) malloc(len + 1);
+	char *cp = (char *) gpr_malloc(len + 1);
 
 	if (cp) {
 	    if (str) memcpy(cp, str, len);

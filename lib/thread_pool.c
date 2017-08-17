@@ -50,7 +50,7 @@ gc_thread_func (void *arg)
 			 pool->gctp_callbacks_head.tqh_first, gctc_callbacks);
 	    gpr_mu_unlock(&pool->gctp_lock);
 	    cb->gctc_func(cb->gctc_arg);
-	    free(cb);
+	    gpr_free(cb);
 	    gpr_mu_lock(&pool->gctp_lock);
 	}
 
@@ -81,9 +81,7 @@ gc_thread_func (void *arg)
 grpc_c_thread_pool_t * 
 grpc_c_thread_pool_create (int n)
 {
-    grpc_c_thread_pool_t *pool = NULL;
-
-    pool = malloc(sizeof(grpc_c_thread_pool_t));
+    grpc_c_thread_pool_t *pool = gpr_malloc(sizeof(grpc_c_thread_pool_t));
     if (pool == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for thread pool");
     } else {
@@ -112,7 +110,7 @@ gc_delete_threads (grpc_c_thread_pool_t *pool)
 	thread = pool->gctp_dead_threads.tqh_first;
 	TAILQ_REMOVE(&pool->gctp_dead_threads, 
 		     pool->gctp_dead_threads.tqh_first, gct_threads);
-	free(thread);
+	gpr_free(thread);
     }
 
 }
@@ -135,7 +133,7 @@ grpc_c_thread_pool_add (grpc_c_thread_pool_t *pool,
      * Add callback function and arguments to the queue
      */
     gpr_mu_lock(&pool->gctp_lock);
-    callback = malloc(sizeof(struct grpc_c_thread_callback_t));
+    callback = gpr_malloc(sizeof(struct grpc_c_thread_callback_t));
     if (callback == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for thread callback");
 	return 1;
@@ -152,7 +150,7 @@ grpc_c_thread_pool_add (grpc_c_thread_pool_t *pool,
      * threads. Else notify one of the waiting threads
      */
     if (pool->gctp_wait_threads == 0) {
-	struct grpc_c_thread_t *gcthread = malloc(sizeof(struct grpc_c_thread_t));
+	struct grpc_c_thread_t *gcthread = gpr_malloc(sizeof(struct grpc_c_thread_t));
 	if (gcthread == NULL) {
 	    gpr_log(GPR_ERROR, "Failed to allocate memory to create thread");
 	    return 1;

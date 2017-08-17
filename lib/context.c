@@ -15,7 +15,7 @@
 grpc_c_context_t *
 grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
 {
-    grpc_c_context_t *context = malloc(sizeof(grpc_c_context_t));
+    grpc_c_context_t *context = gpr_malloc(sizeof(grpc_c_context_t));
     if (context == NULL) {
 	return NULL;
     }
@@ -24,7 +24,7 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     context->gcc_method = method;
     context->gcc_deadline = gpr_inf_future(GPR_CLOCK_REALTIME);
     context->gcc_client_cancel = 1;
-    context->gcc_metadata = malloc(sizeof(grpc_metadata_array));
+    context->gcc_metadata = gpr_malloc(sizeof(grpc_metadata_array));
     if (context->gcc_metadata == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory in context for metadata");
 	grpc_c_context_free(context);
@@ -32,7 +32,7 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     }
     grpc_metadata_array_init(context->gcc_metadata);
 
-    context->gcc_initial_metadata = malloc(sizeof(grpc_metadata_array));
+    context->gcc_initial_metadata = gpr_malloc(sizeof(grpc_metadata_array));
     if (context->gcc_initial_metadata == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory in context for "
 		"initial metadata");
@@ -41,7 +41,7 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     }
     grpc_metadata_array_init(context->gcc_initial_metadata);
 
-    context->gcc_trailing_metadata = malloc(sizeof(grpc_metadata_array));
+    context->gcc_trailing_metadata = gpr_malloc(sizeof(grpc_metadata_array));
     if (context->gcc_trailing_metadata == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory in context for "
 		"trailing metadata");
@@ -51,7 +51,7 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     grpc_metadata_array_init(context->gcc_trailing_metadata);
     
 
-    context->gcc_method_funcs = malloc(sizeof(grpc_c_method_funcs_t));
+    context->gcc_method_funcs = gpr_malloc(sizeof(grpc_c_method_funcs_t));
     if (context->gcc_method_funcs == NULL) {
 	grpc_c_context_free(context);
 	return NULL;
@@ -69,7 +69,7 @@ grpc_c_context_init (struct grpc_c_method_t *method, int is_client)
     /*
      * Allocate memory for stream handler
      */
-    context->gcc_stream = malloc(sizeof(grpc_c_stream_handler_t));
+    context->gcc_stream = gpr_malloc(sizeof(grpc_c_stream_handler_t));
     if (context->gcc_stream == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for stream handler");
 	grpc_c_context_free(context);
@@ -90,11 +90,11 @@ gc_metadata_storage_free (char **store, size_t count)
 
     if (store && count > 0) {
 	for (i = 0; i < count; i++) {
-	    free(store[2 * i]);
-	    free(store[2 * i + 1]);
+	    gpr_free(store[2 * i]);
+	    gpr_free(store[2 * i + 1]);
 	}
     }
-    free(store);
+    gpr_free(store);
 }
 
 /*
@@ -116,7 +116,7 @@ grpc_c_context_free (grpc_c_context_t *context)
 				     context->gcc_metadata->count);
 	}
 	grpc_metadata_array_destroy(context->gcc_metadata);
-	free(context->gcc_metadata);
+	gpr_free(context->gcc_metadata);
     }
 
     /*
@@ -130,7 +130,7 @@ grpc_c_context_free (grpc_c_context_t *context)
 				     context->gcc_initial_metadata->count);
 	}
 	grpc_metadata_array_destroy(context->gcc_initial_metadata);
-	free(context->gcc_initial_metadata);
+	gpr_free(context->gcc_initial_metadata);
     }
 
     if (context->gcc_trailing_metadata) {
@@ -139,7 +139,7 @@ grpc_c_context_free (grpc_c_context_t *context)
 				     context->gcc_trailing_metadata->count);
 	}
 	grpc_metadata_array_destroy(context->gcc_trailing_metadata);
-	free(context->gcc_trailing_metadata);
+	gpr_free(context->gcc_trailing_metadata);
     }
 
     if (context->gcc_call) grpc_call_destroy(context->gcc_call);
@@ -147,7 +147,7 @@ grpc_c_context_free (grpc_c_context_t *context)
     /*
      * Free ops payload when we are done with all the ops
      */
-    if (context->gcc_ops) free(context->gcc_ops);
+    if (context->gcc_ops) gpr_free(context->gcc_ops);
 
     if (context->gcc_ops_payload != NULL) {
 	/*
@@ -162,18 +162,18 @@ grpc_c_context_free (grpc_c_context_t *context)
 		grpc_byte_buffer_destroy(context->gcc_ops_payload[i]);
 	    }
 	}
-	free(context->gcc_ops_payload);
+	gpr_free(context->gcc_ops_payload);
     }
 
-    if (context->gcc_reader) free(context->gcc_reader);
+    if (context->gcc_reader) gpr_free(context->gcc_reader);
 
-    if (context->gcc_writer) free(context->gcc_writer);
+    if (context->gcc_writer) gpr_free(context->gcc_writer);
 
     if (context->gcc_is_client && context->gcc_method) {
-	free(context->gcc_method);
+	gpr_free(context->gcc_method);
     }
 
-    if (context->gcc_method_funcs) free(context->gcc_method_funcs);
+    if (context->gcc_method_funcs) gpr_free(context->gcc_method_funcs);
 
     grpc_slice_unref(context->gcc_status_details);
 
@@ -193,7 +193,7 @@ grpc_c_context_free (grpc_c_context_t *context)
      */
     if (context->gcc_state == GRPC_C_SERVER_CALLBACK_WAIT 
 	|| !grpc_c_get_thread_pool()) {
-	if (context->gcc_lock) free(context->gcc_lock);
+	if (context->gcc_lock) gpr_free(context->gcc_lock);
     }
 
     /*
@@ -219,7 +219,7 @@ grpc_c_context_free (grpc_c_context_t *context)
      * Mark event tag corresponding to this context for cleanup
     if (context->gcc_event) {
 	if (context->gcc_state == GRPC_C_SERVER_CALLBACK_WAIT) {
-	    free(context->gcc_event);
+	    gpr_free(context->gcc_event);
 	} else {
 	    context->gcc_event->gce_type = GRPC_C_EVENT_CLEANUP;
 	    context->gcc_event.gce_data = NULL;
@@ -227,7 +227,7 @@ grpc_c_context_free (grpc_c_context_t *context)
     }
      */
 
-    free(context);
+    gpr_free(context);
 }
 
 /*
@@ -237,14 +237,14 @@ int
 grpc_c_ops_alloc (grpc_c_context_t *context, int count)
 {
     if (context->gcc_ops == NULL) {
-	context->gcc_ops = malloc(sizeof(grpc_op) * count);
+	context->gcc_ops = gpr_malloc(sizeof(grpc_op) * count);
 	if (context->gcc_ops == NULL) {
 	    gpr_log(GPR_ERROR, "Failed to allocate memory for ops");
 	    return 1;
 	}
 	memset(context->gcc_ops, 0, sizeof(grpc_op) * count);
 
-	context->gcc_ops_payload = malloc(sizeof(grpc_byte_buffer *) * count);
+	context->gcc_ops_payload = gpr_malloc(sizeof(grpc_byte_buffer *) * count);
 	if (context->gcc_ops_payload == NULL) {
 	    gpr_log(GPR_ERROR, "Failed to allocate memory for ops payload");
 	    return 1;
@@ -254,8 +254,8 @@ grpc_c_ops_alloc (grpc_c_context_t *context, int count)
 	context->gcc_op_capacity = count;
     } else {
 	if (context->gcc_op_count + count > context->gcc_op_capacity) {
-	    context->gcc_ops = realloc(context->gcc_ops, sizeof(grpc_op) * 
-				       (count + context->gcc_op_capacity));
+	    context->gcc_ops = gpr_realloc(context->gcc_ops, sizeof(grpc_op) * 
+					   (count + context->gcc_op_capacity));
 	    if (context->gcc_ops == NULL) {
 		gpr_log(GPR_ERROR, "Failed to realloc memory for ops");
 		return 1;
@@ -263,9 +263,9 @@ grpc_c_ops_alloc (grpc_c_context_t *context, int count)
 	    memset(context->gcc_ops + context->gcc_op_capacity, 0, 
 		   sizeof(grpc_op) * count);
 
-	    context->gcc_ops_payload = realloc(context->gcc_ops_payload, 
-					       sizeof(grpc_byte_buffer *) * 
-					       (count + context->gcc_op_capacity));
+	    context->gcc_ops_payload = gpr_realloc(context->gcc_ops_payload, 
+						   sizeof(grpc_byte_buffer *) * 
+						   (count + context->gcc_op_capacity));
 	    if (context->gcc_ops_payload == NULL) {
 		gpr_log(GPR_ERROR, "Failed to realloc memory for ops payload");
 		return 1;

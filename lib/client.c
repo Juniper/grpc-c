@@ -36,7 +36,7 @@ gc_client_create_by_host (const char *host, const char *id,
 	return NULL;
     }
 
-    client = malloc(sizeof(grpc_c_client_t));
+    client = gpr_malloc(sizeof(grpc_c_client_t));
     if (client == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for client");
 	return NULL;
@@ -184,7 +184,7 @@ grpc_c_client_free (grpc_c_client_t *client)
 	    gpr_mu_unlock(&client->gcc_lock);
 	}
 
-	if (client->gcc_id) free(client->gcc_id);
+	if (client->gcc_id) gpr_free(client->gcc_id);
 	grpc_slice_unref(client->gcc_host);
 
 	/*
@@ -212,7 +212,7 @@ grpc_c_client_free (grpc_c_client_t *client)
 	gpr_cv_destroy(&client->gcc_shutdown_cv);
 	gpr_mu_destroy(&client->gcc_lock);
 
-	free(client);
+	gpr_free(client);
     }
 }
 
@@ -454,7 +454,7 @@ gc_handle_client_event_internal (grpc_completion_queue *cq,
 		    /*
 		     * Create a context lock to syncronize access to this cq
 		     */
-		    context->gcc_lock = malloc(sizeof(gpr_mu));
+		    context->gcc_lock = gpr_malloc(sizeof(gpr_mu));
 		    if (context->gcc_lock == NULL) {
 			gpr_log(GPR_ERROR, "Failed to allocate context lock");
 			break;
@@ -568,7 +568,7 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
 	return NULL;
     }
 
-    context->gcc_method = malloc(sizeof(struct grpc_c_method_t));
+    context->gcc_method = gpr_malloc(sizeof(struct grpc_c_method_t));
     if (context->gcc_method == NULL) {
 	grpc_c_context_free(context);
 	return NULL;
@@ -707,7 +707,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
 	return NULL;
     }
 
-    context->gcc_method = malloc(sizeof(struct grpc_c_method_t));
+    context->gcc_method = gpr_malloc(sizeof(struct grpc_c_method_t));
     if (context->gcc_method == NULL) {
 	grpc_c_context_free(context);
 	return NULL;
@@ -716,7 +716,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
 
     grpc_c_stream_handler_t *stream_handler;
     if (context->gcc_stream == NULL) {
-	stream_handler = malloc(sizeof(grpc_c_stream_handler_t));
+	stream_handler = gpr_malloc(sizeof(grpc_c_stream_handler_t));
     } else {
 	stream_handler = context->gcc_stream;
     }
@@ -732,7 +732,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
     stream_handler->finish = &gc_client_stream_finish;
     context->gcc_stream = stream_handler;
 
-    context->gcc_lock = malloc(sizeof(gpr_mu));
+    context->gcc_lock = gpr_malloc(sizeof(gpr_mu));
     if (context->gcc_lock == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate context lock");
 	grpc_c_context_free(context);
@@ -863,7 +863,7 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
 	return NULL;
     }
 
-    context->gcc_method = malloc(sizeof(struct grpc_c_method_t));
+    context->gcc_method = gpr_malloc(sizeof(struct grpc_c_method_t));
     if (context->gcc_method == NULL) {
 	grpc_c_context_free(context);
 	return NULL;

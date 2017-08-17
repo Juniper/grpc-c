@@ -96,7 +96,7 @@ grpc_c_register_method (grpc_c_server_t *server, const char *method,
 	return 1;
     }
 
-    struct grpc_c_method_t *gcm = malloc(sizeof(struct grpc_c_method_t));
+    struct grpc_c_method_t *gcm = gpr_malloc(sizeof(struct grpc_c_method_t));
     if (gcm == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for method %s", method);
 	return 1;
@@ -218,7 +218,7 @@ gc_prepare_server_callback (grpc_c_context_t *context)
     int method_id = method->gcm_method_id;
 
     grpc_c_stream_handler_t *stream_handler 
-	= malloc(sizeof(grpc_c_stream_handler_t));
+	= gpr_malloc(sizeof(grpc_c_stream_handler_t));
     if (stream_handler == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for stream handler");
 	grpc_c_context_free(context);
@@ -252,7 +252,7 @@ gc_prepare_server_callback (grpc_c_context_t *context)
      * grpc_c_event in context so we can query it if needed
      */
     grpc_c_event_t *gcev = &context->gcc_recv_close_event;
-    gcs_rc_data = malloc(sizeof(gcs_recv_close_data_t));
+    gcs_rc_data = gpr_malloc(sizeof(gcs_recv_close_data_t));
     if (gcs_rc_data == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for event data");
 	return 1;
@@ -275,7 +275,7 @@ gc_prepare_server_callback (grpc_c_context_t *context)
 
     if (e != GRPC_CALL_OK) {
 	gpr_log(GPR_ERROR, "Failed to start batch for RECV_CLOSE");
-	free(gcs_rc_data);
+	gpr_free(gcs_rc_data);
 	return 1;
     }
 
@@ -469,7 +469,7 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 		    if (context) {
 			context->gcc_call_cancelled = 1;
 		    }
-		    free(gcev->gce_data);
+		    gpr_free(gcev->gce_data);
 		    gcev->gce_data = NULL;
 		} else if (gcev->gce_type == GRPC_C_EVENT_READ) {
 		    /*
@@ -543,7 +543,7 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 			 * Create a context lock to syncronize access to 
 			 * this cq
 			 */
-			context->gcc_lock = malloc(sizeof(gpr_mu));
+			context->gcc_lock = gpr_malloc(sizeof(gpr_mu));
 			if (context->gcc_lock == NULL) {
 			    gpr_log(GPR_ERROR, "Failed to allocate context lock");
 			    break;
@@ -585,7 +585,7 @@ gc_handle_server_event_internal (grpc_completion_queue *cq,
 		 */
 		if (context_lock && server && server->gcs_cq != cq) {
 		    gpr_mu_destroy(context_lock);
-		    free(context_lock);
+		    gpr_free(context_lock);
 		    context_lock = NULL;
 		}
 		shutdown = 1;
@@ -616,7 +616,7 @@ gc_run_rpc (void *arg)
     struct gcs_thread_data_t *data = (struct gcs_thread_data_t *)arg;
     grpc_completion_queue *cq = data->cq;
     grpc_c_server_t *server = data->server;
-    free(data);
+    gpr_free(data);
 
     gc_handle_server_event_internal(cq, server, 
 				    gpr_inf_future(GPR_CLOCK_REALTIME));
@@ -628,7 +628,7 @@ gc_run_rpc (void *arg)
 static void 
 gc_schedule_callback (grpc_completion_queue *cq, grpc_c_server_t *server) 
 {
-    struct gcs_thread_data_t *data = malloc(sizeof(struct gcs_thread_data_t));
+    struct gcs_thread_data_t *data = gpr_malloc(sizeof(struct gcs_thread_data_t));
     if (data == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memeory for thread");
 	return;
@@ -659,7 +659,7 @@ grpc_c_server_wait (grpc_c_server_t *server)
     gpr_cv *callback_cv = NULL;
     int running_cb = 0, shutdown = 0;
 
-    callback_cv = malloc(sizeof(gpr_cv));
+    callback_cv = gpr_malloc(sizeof(gpr_cv));
     if (callback_cv == NULL) {
 	gpr_log(GPR_ERROR, "Failed to allocate memory for callback cv");
 	return;
@@ -679,7 +679,7 @@ grpc_c_server_wait (grpc_c_server_t *server)
     gpr_mu_unlock(&mu);
     gpr_cv_destroy(callback_cv);
     gpr_mu_destroy(&mu);
-    free(callback_cv);
+    gpr_free(callback_cv);
 }
 
 /*
@@ -720,22 +720,22 @@ int
 grpc_c_methods_alloc (grpc_c_server_t *server, int method_count)
 {
     if (server->gcs_method_funcs == NULL) {
-	server->gcs_method_funcs = malloc(method_count 
-					  * sizeof(grpc_c_method_funcs_t));
-	server->gcs_contexts = malloc(method_count 
-				      * sizeof(grpc_c_context_t *));
+	server->gcs_method_funcs = gpr_malloc(method_count 
+					      * sizeof(grpc_c_method_funcs_t));
+	server->gcs_contexts = gpr_malloc(method_count 
+					  * sizeof(grpc_c_context_t *));
     } else {
-	server->gcs_method_funcs = realloc(server->gcs_method_funcs, 
+	server->gcs_method_funcs = gpr_realloc(server->gcs_method_funcs, 
+					       (method_count + server->gcs_method_count) 
+					       * sizeof(grpc_c_method_funcs_t));
+	server->gcs_contexts = gpr_realloc(server->gcs_contexts, 
 					   (method_count + server->gcs_method_count) 
-					   * sizeof(grpc_c_method_funcs_t));
-	server->gcs_contexts = realloc(server->gcs_contexts, 
-				       (method_count + server->gcs_method_count) 
-				       * sizeof(grpc_c_context_t *));
+					   * sizeof(grpc_c_context_t *));
     }
 
     if (server->gcs_method_funcs == NULL || server->gcs_contexts == NULL) {
-	free(server->gcs_method_funcs);
-	free(server->gcs_contexts);
+	gpr_free(server->gcs_method_funcs);
+	gpr_free(server->gcs_contexts);
 	return 1;
     }
     
@@ -778,7 +778,7 @@ gc_server_create_internal (const char *host, grpc_server_credentials *creds,
     /*
      * Server structure stuff
      */
-    grpc_c_server_t *server = malloc(sizeof(grpc_c_server_t));
+    grpc_c_server_t *server = gpr_malloc(sizeof(grpc_c_server_t));
     if (server == NULL) {
 	return NULL;
     }
@@ -903,7 +903,7 @@ grpc_c_context_is_call_cancelled (grpc_c_context_t *context)
 
     if (ev.type == GRPC_OP_COMPLETE) {
 	context->gcc_call_cancelled = 1;
-	free(context->gcc_recv_close_event.gce_data);
+	gpr_free(context->gcc_recv_close_event.gce_data);
 	context->gcc_recv_close_event.gce_data = NULL;
 	return ev.success;
     }
@@ -935,7 +935,7 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 	    gpr_mu_unlock(&server->gcs_lock);
 	}
 
-	if (server->gcs_host) free(server->gcs_host);
+	if (server->gcs_host) gpr_free(server->gcs_host);
 
 	if (server->gcs_server) {
 	    server->gcs_shutdown_event.gce_refcount++;
@@ -973,24 +973,24 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 	 */
 	if (server->gcs_method_funcs) {
 	    for (i = 0; i < server->gcs_method_count; i++) {
-		free(server->gcs_method_funcs[i].gcmf_name);
+		gpr_free(server->gcs_method_funcs[i].gcmf_name);
 		if (server->gcs_contexts[i]) {
 		    grpc_completion_queue_shutdown(server->gcs_contexts[i]->gcc_cq);
 		    grpc_completion_queue_destroy(server->gcs_contexts[i]->gcc_cq);
 		    grpc_c_context_free(server->gcs_contexts[i]);
 		}
 	    }
-	    free(server->gcs_method_funcs);
-	    free(server->gcs_contexts);
+	    gpr_free(server->gcs_method_funcs);
+	    gpr_free(server->gcs_contexts);
 	}
 
 	while (!LIST_EMPTY(&server->gcs_method_list_head)) {
 	    np = LIST_FIRST(&server->gcs_method_list_head);
 	    LIST_REMOVE(np, gcm_list);
 
-	    if (np->gcm_name) free(np->gcm_name);
+	    if (np->gcm_name) gpr_free(np->gcm_name);
 
-	    free(np);
+	    gpr_free(np);
 	}
 
 	/*
@@ -1010,6 +1010,6 @@ grpc_c_server_destroy (grpc_c_server_t *server)
 	gpr_cv_destroy(&server->gcs_cq_destroy_cv);
 	gpr_mu_destroy(&server->gcs_lock);
 
-	free(server);
+	gpr_free(server);
     }
 }

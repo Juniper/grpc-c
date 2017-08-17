@@ -26,8 +26,8 @@ grpc_c_metadata_array_destroy (grpc_c_metadata_array_t *array)
      * Free metadata keyvalue pairs
      */
     while (array->count > 0) {
-	gpr_free(array->metadata[array->count - 1].key);
-	gpr_free(array->metadata[array->count - 1].value);
+	grpc_slice_unref(array->metadata[array->count - 1].key);
+	grpc_slice_unref(array->metadata[array->count - 1].value);
 
 	array->count -= 1;
     }
@@ -78,12 +78,12 @@ grpc_c_add_metadata_by_array (grpc_c_metadata_array_t *mdarray,
     mdarray->capacity += 1;
     mdarray->count += 1;
     if (mdarray->metadata != NULL) {
-	mdarray->metadata = realloc(mdarray->metadata, 
+	mdarray->metadata = gpr_realloc(mdarray->metadata, 
 				    mdarray->capacity * sizeof(grpc_metadata));
-	*store = realloc(*store, mdarray->capacity * sizeof(char *) * 2);
+	*store = gpr_realloc(*store, mdarray->capacity * sizeof(char *) * 2);
     } else {
-	mdarray->metadata = malloc(sizeof(grpc_metadata));
-	*store = malloc(sizeof(char *) * 2);
+	mdarray->metadata = gpr_malloc(sizeof(grpc_metadata));
+	*store = gpr_malloc(sizeof(char *) * 2);
     }
 
     if (mdarray->metadata == NULL) {
