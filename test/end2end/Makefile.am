@@ -84,11 +84,4 @@ $(foreach name,${GRPC_C_END2END_TESTS},${name}_test):
 	@echo Running $@
 	${TESTER} ${@:_test=} 127.0.0.1:50000
 
-#${SERVER} ${@:_test=} 127.0.0.1:50000 & echo $$! > .server.pid
-#sleep 1
-#@echo Starting client
-#${CLIENT} ${@:_test=} 127.0.0.1:50000; echo $$! > .client.pid
-#wait `cat .server.pid`
-#wait `cat .client.pid`
-
 all: gencode tester client server tests
