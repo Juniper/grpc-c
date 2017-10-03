@@ -185,8 +185,8 @@ void FileGenerator::GenerateHeader(io::Printer* printer) {
 
   for (int i = 0; i < file_->dependency_count(); i++) {
     printer->Print(
-      "#include \"$dependency$.h\"\n",
-      "dependency", file_->dependency(i)->name());
+      "#include \"$dependency$.grpc-c.h\"\n",
+      "dependency", c::StripProto(file_->dependency(i)->name()));
   }
 
   printer->Print("\n");
