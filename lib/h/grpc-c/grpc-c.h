@@ -460,28 +460,28 @@ grpc_c_is_write_pending (grpc_c_context_t *context)
  * Stream read, write and finish function signatures 
  */
 typedef int (grpc_c_read_t)(grpc_c_context_t *context, void **content, 
-			    long timeout);
+			    uint32_t flags, long timeout);
 
 typedef int (grpc_c_write_t)(grpc_c_context_t *context, void *output, 
-			     long timeout);
+			     uint32_t flags, long timeout);
 
 typedef int (grpc_c_read_finish_t)(grpc_c_context_t *context, 
-				   grpc_c_status_t *status);
+				   grpc_c_status_t *status, uint32_t flags);
 
 typedef int (grpc_c_write_finish_t)(grpc_c_context_t *context, int status, 
-				    const char *message);
+				    const char *message, uint32_t flags);
 
 typedef int (grpc_c_stream_read_t)(grpc_c_context_t *context, void **content, 
-				   long timeout);
+				   uint32_t flags, long timeout);
 
 typedef int (grpc_c_stream_write_t)(grpc_c_context_t *context, void *output, 
-				    long timeout);
+				    uint32_t flags, long timeout);
 
 typedef int (grpc_c_stream_write_done_t)(grpc_c_context_t *context, 
-					 long timeout);
+					 uint32_t flags, long timeout);
 
 typedef int (grpc_c_stream_finish_t)(grpc_c_context_t *context, 
-				     grpc_c_status_t *status);
+				     grpc_c_status_t *status, uint32_t flags);
 
 typedef void (grpc_c_method_data_free_t)(grpc_c_context_t *context, void *buf);
 
@@ -750,7 +750,7 @@ int grpc_c_send_initial_metadata (grpc_c_context_t *context, long timeout);
 const char *grpc_c_get_client_id (grpc_c_context_t *context);
 
 int grpc_c_client_request_unary (grpc_c_client_t *client, 
-				 grpc_c_metadata_array_t *array, 
+				 grpc_c_metadata_array_t *array, uint32_t flags,  
 				 const char *method, 
 				 void *input, void **output, 
 				 grpc_c_status_t *status, 
@@ -766,7 +766,7 @@ int grpc_c_client_request_unary (grpc_c_client_t *client,
  * Main function for non-streaming/synchronous RPC call from client
  */
 int grpc_c_client_request_sync (grpc_c_client_t *client, 
-				grpc_c_metadata_array_t *mdarray, 
+				grpc_c_metadata_array_t *mdarray, uint32_t flags, 
 				grpc_c_context_t **context, const char *method, 
 				void *inpupt, int client_streaming, 
 				int server_streaming, 
@@ -782,7 +782,7 @@ int grpc_c_client_request_sync (grpc_c_client_t *client,
  * Main function for asynchronous/streaming RPC call from client
  */
 int grpc_c_client_request_async (grpc_c_client_t *client, 
-				 grpc_c_metadata_array_t *mdarray, 
+				 grpc_c_metadata_array_t *mdarray, uint32_t flags, 
 				 const char *method, 
 				 void *input, grpc_c_client_callback_t *cb, 
 				 void *tag, int client_streaming, 

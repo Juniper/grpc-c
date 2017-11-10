@@ -19,30 +19,36 @@ int gc_send_initial_metadata_internal (grpc_c_context_t *context, int send);
  * Read handler. Returns data if already available or puts in a request for
  * data
  */
-int gc_stream_read (grpc_c_context_t *context, void **output, long timeout);
+int 
+gc_stream_read (grpc_c_context_t *context, void **output, uint32_t flags, 
+		long timeout);
 
 /*
  * Sends given data into the stream. If previous write is still pending,
  * return GRPC_C_WRITE_PENDING
  */
-int gc_stream_write (grpc_c_context_t *context, void *input, long timeout);
+int 
+gc_stream_write (grpc_c_context_t *context, void *input, uint32_t flags, 
+		 long timeout);
 
 /*
  * Finishes write from client
  */
-int gc_client_stream_write_done (grpc_c_context_t *context, long timeout);
+int 
+gc_client_stream_write_done (grpc_c_context_t *context, uint32_t flags, 
+			     long timeout);
 
 /*
  * Finishes stream from client
  */
 int gc_client_stream_finish (grpc_c_context_t *context, 
-			     grpc_c_status_t *status);
+			     grpc_c_status_t *status, uint32_t flags);
 
 /*
  * Finishes stream from server
  */
 int gc_server_stream_finish (grpc_c_context_t *context, 
-			     grpc_c_status_t *status);
+			     grpc_c_status_t *status, uint32_t flags);
 
 /*
  * Calculate timeout spec from millisecs

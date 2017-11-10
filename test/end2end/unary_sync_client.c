@@ -28,12 +28,12 @@ unary_sync_client (grpc_c_client_t *client)
     /*
      * This will invoke a blocking RPC
      */
-    unary_sync__greeter__say_hello__sync(client, NULL, &context, &h, -1);
-    context->gcc_stream->read(context, (void **)&r, -1);
+    unary_sync__greeter__say_hello__sync(client, NULL, 0, &context, &h, -1);
+    context->gcc_stream->read(context, (void **)&r, 0, -1);
     if (r) {
 	printf("Got back: %s\n", r->message);
     }
-    status = context->gcc_stream->finish(context, NULL);
+    status = context->gcc_stream->finish(context, NULL, 0);
     printf("Finished with %d\n", status);
     success = 1;
 }

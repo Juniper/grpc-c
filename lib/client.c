@@ -550,9 +550,10 @@ gc_handle_client_event (grpc_completion_queue *cq)
  */
 static grpc_c_context_t *
 gc_client_prepare_async_ops (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, void *input, 
-			     grpc_c_client_callback_t *cb, void *tag, 
-			     int client_streaming, int server_streaming, 
+			     grpc_c_metadata_array_t *mdarray, uint32_t flags, 
+			     void *input, grpc_c_client_callback_t *cb, 
+			     void *tag, int client_streaming, 
+			     int server_streaming, 
 			     grpc_c_method_data_pack_t *input_packer, 
 			     grpc_c_method_data_unpack_t *input_unpacker, 
 			     grpc_c_method_data_free_t *input_free, 
@@ -637,6 +638,7 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
      * Send initial metadata with client-id
      */
     context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
+    context->gcc_ops[op_count].flags = flags;
     context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
     context->gcc_ops[op_count].data.send_initial_metadata.metadata 
 	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
@@ -688,8 +690,8 @@ gc_client_prepare_async_ops (grpc_c_client_t *client,
  */
 static grpc_c_context_t *
 gc_client_prepare_sync_ops (grpc_c_client_t *client, 
-			    grpc_c_metadata_array_t *mdarray, void *input, 
-			    void *tag, int client_streaming, 
+			    grpc_c_metadata_array_t *mdarray, uint32_t flags, 
+			    void *input, void *tag, int client_streaming, 
 			    int server_streaming, 
 			    grpc_c_client_callback_t *cb, 
 			    grpc_c_method_data_pack_t *input_packer, 
@@ -802,6 +804,7 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
      * Send initial metadata with client-id
      */
     context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
+    context->gcc_ops[op_count].flags = flags;
     context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
     context->gcc_ops[op_count].data.send_initial_metadata.metadata 
 	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
@@ -844,8 +847,8 @@ gc_client_prepare_sync_ops (grpc_c_client_t *client,
  */
 static grpc_c_context_t *
 gc_client_prepare_unary_ops (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, void *input, 
-			     void *tag, int client_streaming, 
+			     grpc_c_metadata_array_t *mdarray, uint32_t flags, 
+			     void *input, void *tag, int client_streaming, 
 			     int server_streaming, 
 			     grpc_c_client_callback_t *cb, 
 			     grpc_c_method_data_pack_t *input_packer, 
@@ -935,6 +938,7 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
      * Send initial metadata with client-id
      */
     context->gcc_ops[op_count].op = GRPC_OP_SEND_INITIAL_METADATA;
+    context->gcc_ops[op_count].flags = flags;
     context->gcc_ops[op_count].data.send_initial_metadata.count = mdcount + 1;
     context->gcc_ops[op_count].data.send_initial_metadata.metadata 
 	= &context->gcc_metadata->metadata[context->gcc_metadata->count - 1];
@@ -1003,7 +1007,7 @@ gc_client_prepare_unary_ops (grpc_c_client_t *client,
  */
 int
 grpc_c_client_request_async (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, 
+			     grpc_c_metadata_array_t *mdarray, uint32_t flags, 
 			     const char *method, void *input, 
 			     grpc_c_client_callback_t *cb, void *tag, 
 			     int client_streaming, int server_streaming, 
@@ -1016,7 +1020,8 @@ grpc_c_client_request_async (grpc_c_client_t *client,
 {
     grpc_call_error e;
     grpc_c_context_t *context = gc_client_prepare_async_ops(client, mdarray, 
-							    input, cb, tag,  
+							    flags, input, cb, 
+							    tag, 
 							    client_streaming, 
 							    server_streaming, 
 							    input_packer, 
@@ -1060,7 +1065,7 @@ grpc_c_client_request_async (grpc_c_client_t *client,
  */
 int
 grpc_c_client_request_unary (grpc_c_client_t *client, 
-			     grpc_c_metadata_array_t *mdarray, 
+			     grpc_c_metadata_array_t *mdarray, uint32_t flags, 
 			     const char *method, void *input, void **output, 
 			     grpc_c_status_t *status, int client_streaming, 
 			     int server_streaming, 
@@ -1076,8 +1081,8 @@ grpc_c_client_request_unary (grpc_c_client_t *client,
     grpc_call_error e;
     grpc_event ev;
     gpr_timespec tout;
-    grpc_c_context_t *context = gc_client_prepare_unary_ops(client, mdarray, 
-							    input, NULL, 
+    grpc_c_context_t *context = gc_client_prepare_unary_ops(client, mdarray,  
+							    flags, input, NULL, 
 							    client_streaming, 
 							    server_streaming, 
 							    NULL, input_packer, 
@@ -1203,7 +1208,7 @@ cleanup:
  */
 int
 grpc_c_client_request_sync (grpc_c_client_t *client, 
-			    grpc_c_metadata_array_t *mdarray, 
+			    grpc_c_metadata_array_t *mdarray, uint32_t flags,  
 			    grpc_c_context_t **pcontext, const char *method, 
 			    void *input, int client_streaming, 
 			    int server_streaming, 
@@ -1227,7 +1232,7 @@ grpc_c_client_request_sync (grpc_c_client_t *client,
 	goto cleanup;
     }
 
-    context = gc_client_prepare_sync_ops(client, mdarray, input, NULL, 
+    context = gc_client_prepare_sync_ops(client, mdarray, flags, input, NULL, 
 					 client_streaming, server_streaming, 
 					 NULL, input_packer, input_unpacker, 
 					 input_free, output_packer, 

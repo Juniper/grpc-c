@@ -126,7 +126,8 @@ grpc_c_register_method (grpc_c_server_t *server, const char *method,
  * Finishes read operations and clears payload buffer
  */
 static int
-gc_read_ops_finish (grpc_c_context_t *context, grpc_c_status_t *status UNUSED)
+gc_read_ops_finish (grpc_c_context_t *context, grpc_c_status_t *status UNUSED, 
+		    uint32_t flags UNUSED)
 {
     grpc_byte_buffer_destroy(context->gcc_payload);
     context->gcc_payload = NULL;
@@ -417,7 +418,7 @@ gc_handle_server_complete_op (grpc_c_context_t *context, int success)
 	    grpc_c_status_t status;
 	    status.gcs_code = context->gcc_status;
 	    bzero(status.gcs_message, sizeof(status.gcs_message));
-	    gc_server_stream_finish(context, &status);
+	    gc_server_stream_finish(context, &status, 0);
 	}
     }
 }

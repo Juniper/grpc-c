@@ -93,7 +93,8 @@ gc_send_initial_metadata_internal (grpc_c_context_t *context, int send)
  * Reads data from stream
  */
 int
-gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
+gc_stream_read (grpc_c_context_t *context, void **output, 
+		uint32_t flags UNUSED, long timeout)
 {
     grpc_event ev;
     gpr_timespec deadline;
@@ -176,7 +177,8 @@ gc_stream_read (grpc_c_context_t *context, void **output, long timeout)
  * Write function for client
  */
 int
-gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
+gc_stream_write (grpc_c_context_t *context, void *input, uint32_t flags, 
+		 long timeout)
 {
     grpc_event ev;
     gpr_timespec deadline;
@@ -212,6 +214,7 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
 					&context->gcc_ops_payload[op_count]);
 	}
 	context->gcc_ops[op_count].op = GRPC_OP_SEND_MESSAGE;
+	context->gcc_ops[op_count].flags = flags;
 	context->gcc_ops[op_count].data.send_message.send_message  
 	    = context->gcc_ops_payload[op_count];
 	context->gcc_op_count++;
@@ -255,7 +258,8 @@ gc_stream_write (grpc_c_context_t *context, void *input, long timeout)
  * This is used to send a write finish from client
  */
 int 
-gc_client_stream_write_done (grpc_c_context_t *context, long timeout)
+gc_client_stream_write_done (grpc_c_context_t *context, uint32_t flags UNUSED, 
+			     long timeout)
 {
     grpc_event ev;
     grpc_call_error e;
@@ -327,7 +331,8 @@ gc_client_stream_write_done (grpc_c_context_t *context, long timeout)
  * when server sent NULL marking end of output
  */
 int
-gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
+gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status, 
+			 uint32_t flags UNUSED)
 {
     grpc_event ev;
     grpc_call_error e;
@@ -395,7 +400,8 @@ gc_client_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
  * Server stream finish function
  */
 int
-gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status)
+gc_server_stream_finish (grpc_c_context_t *context, grpc_c_status_t *status, 
+			 uint32_t flags UNUSED)
 {
     int op_count = context->gcc_op_count;
     gpr_slice status_details;
