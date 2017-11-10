@@ -31,6 +31,7 @@ AC_CONFIG_FILES([
     lib/Makefile
     test/Makefile
     test/end2end/Makefile
+    test/interop/Makefile
     Makefile
 ])
 

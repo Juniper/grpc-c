@@ -3,7 +3,7 @@
 # All rights reserved.
 #
 
-SUBDIRS = end2end
+SUBDIRS = end2end interop
 
 test:
 	@(cur=`pwd` ; for dir in ${SUBDIRS} ; do \
