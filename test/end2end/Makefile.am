@@ -70,8 +70,6 @@ LDADD = \
     -lpthread
 
 AM_CFLAGS = \
-    -I. \
-    -I${curdir} \
     -I${srcdir}/../../lib/h/ \
     -I${srcdir}/../../lib/ \
     -I${srcdir}/../../third_party/protobuf-c \
