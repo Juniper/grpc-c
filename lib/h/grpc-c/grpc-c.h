@@ -620,7 +620,7 @@ grpc_c_server_create (const char *name,
  * Create a server object with given address
  */
 grpc_c_server_t *
-grpc_c_server_create_by_host (char *addr, grpc_server_credentials *creds, 
+grpc_c_server_create_by_host (const char *addr, grpc_server_credentials *creds, 
 			      grpc_channel_args *args);
 
 /*

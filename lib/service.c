@@ -843,7 +843,7 @@ grpc_c_server_create (const char *name, grpc_server_credentials *creds,
  * Creates a grpc-c server with provided address
  */
 grpc_c_server_t *
-grpc_c_server_create_by_host (char *addr, grpc_server_credentials *creds, 
+grpc_c_server_create_by_host (const char *addr, grpc_server_credentials *creds, 
 			      grpc_channel_args *args)
 {
     if (addr == NULL) {
