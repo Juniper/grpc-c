@@ -2,16 +2,26 @@
 
 C implementation of [gRPC](http://www.grpc.io/) layered of top of core libgrpc. 
 
+## Prerequisites
+
+Make sure you have the following install in order to install dependencies
+
+    autoconf automake libtool curl make g++ unzip
+
+
 ## Build
 
 ```sh
 autoreconf --install
 git submodule update --init
+./buildgen.sh
 mkdir build && cd build
 ../configure
 make
 sudo make install
 ```
+
+If you want to install dependencies in a different directory other than /usr/local/, use ./buildgen.sh <your-prefix>
 
 
 ## Examples
