@@ -31,8 +31,8 @@ protoc_gen_grpc_c_SOURCES = \
     main.cc
 
 protoc_gen_grpc_c_LDADD = \
-    /usr/local/lib/libprotobuf.a \
-    /usr/local/lib/libprotoc.a
+    ${prefix}/lib/libprotobuf.a \
+    ${prefix}/lib/libprotoc.a
 
 AM_CXXFLAGS = \
     -I${srcdir} \
