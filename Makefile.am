@@ -5,5 +5,5 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = compiler lib test
+SUBDIRS = compiler lib
 dist_doc_DATA = README.md
