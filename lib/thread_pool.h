@@ -8,6 +8,7 @@
 
 #include <strings.h>
 #include <sys/queue.h>
+#include <grpc/support/alloc.h>
 #include <grpc/support/log.h>
 #include <grpc/support/thd.h>
 #include <grpc/support/sync.h>
