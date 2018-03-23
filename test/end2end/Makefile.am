@@ -80,6 +80,6 @@ AM_CFLAGS = \
 #
 $(foreach name,${GRPC_C_END2END_TESTS},${name}_test):
 	@echo Running $@
-	${TESTER} ${@:_test=} 127.0.0.1:50000
+	LD_LIBRARY_PATH=${prefix}/lib ${TESTER} ${@:_test=} 127.0.0.1:50000
 
 all: gencode tester client server tests
