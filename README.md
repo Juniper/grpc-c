@@ -14,7 +14,7 @@ Make sure you have the following install in order to install dependencies
 ```sh
 autoreconf --install
 git submodule update --init
-./buildgen.sh
+./builddeps.sh
 mkdir build && cd build
 ../configure
 make
