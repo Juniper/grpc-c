@@ -24,14 +24,14 @@ static void
 cb (grpc_c_context_t *context, void *tag, int success)
 {
     foo__HelloReply *r;
-    if (context->gcc_stream->read(context, (void **)&r, -1)) {
+    if (context->gcc_stream->read(context, (void **)&r, 0, -1)) {
 	printf("Failed to read\n");
 	exit(1);
     }
 
     if (r) {
 	printf("Got back: %s\n", r->message);
-	int status = context->gcc_stream->finish(context, NULL);
+	int status = context->gcc_stream->finish(context, NULL, 0);
 	printf("Finished with %d\n", status);
 	done = 1;
     }
@@ -73,7 +73,7 @@ main (int argc, char **argv)
     /*
      * This will invoke a async RPC
      */
-    foo__greeter__say_hello__async(client, NULL, &h, &cb, (void *)1);
+    foo__greeter__say_hello__async(client, NULL, 0, &h, &cb, (void *)1);
 
     pthread_t thr;
     pthread_create(&thr, NULL, test_check, NULL);

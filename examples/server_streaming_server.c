@@ -28,7 +28,7 @@ server_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
     /*
      * Read incoming message into h
      */
-    if (context->gcc_stream->read(context, (void **)&h, 0)) {
+    if (context->gcc_stream->read(context, (void **)&h, 0, 0)) {
 	printf("Failed to read input from client\n");
 	exit(1);
     }
@@ -49,7 +49,7 @@ server_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
      * Stream 20 messages to the client
      */
     for (i = 0; i < 20; i++) {
-	if (!context->gcc_stream->write(context, &r, -1)) {
+	if (!context->gcc_stream->write(context, &r, 0, -1)) {
 	    printf("Wrote hello world to %s\n", grpc_c_get_client_id(context));
 	} else {
 	    printf("Failed to write\n");
@@ -62,7 +62,7 @@ server_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
      */
     grpc_c_status_t status;
     status.gcs_code = 0;
-    if (context->gcc_stream->finish(context, &status)) {
+    if (context->gcc_stream->finish(context, &status, 0)) {
         printf("Failed to write status\n");
         exit(1);
     }

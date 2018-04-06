@@ -36,18 +36,18 @@ cb (grpc_c_context_t *context, void *tag, int success)
      * Stream messages to server and finish
      */
     for (i = 0; i < 10; i++) {
-	if (context->gcc_stream->write(context, &h, -1)) {
+	if (context->gcc_stream->write(context, &h, 0, -1)) {
 	    printf("Failed to write\n");
 	    exit(1);
 	}
     }
-    context->gcc_stream->write_done(context, -1);
+    context->gcc_stream->write_done(context, 0, -1);
 
     /*
      * Read replies from server
      */
     do {
-	if (context->gcc_stream->read(context, (void **)&r, -1)) {
+	if (context->gcc_stream->read(context, (void **)&r, 0, -1)) {
 	    printf("Failed to read\n");
 	    exit(1);
 	}
@@ -57,7 +57,7 @@ cb (grpc_c_context_t *context, void *tag, int success)
 	}
     } while (r);
 
-    int status = context->gcc_stream->finish(context, NULL);
+    int status = context->gcc_stream->finish(context, NULL, 0);
     printf("Finished with %d\n", status);
     done = 1;
 }
@@ -87,7 +87,7 @@ main (int argc, char **argv)
     /*
      * This will invoke a async RPC
      */
-    bidi_streaming__greeter__say_hello__async(client, NULL, NULL, &cb, 
+    bidi_streaming__greeter__say_hello__async(client, NULL, 0, NULL, &cb, 
 					      (void *)1);
 
     pthread_t thr;

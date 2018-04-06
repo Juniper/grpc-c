@@ -34,9 +34,9 @@ client_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
      * Read messages from the client
      */
     do {
-	if (!context->gcc_stream->read(context, (void **)&h, -1)) {
+	if (!context->gcc_stream->read(context, (void **)&h, 0, -1)) {
 	    if (h) {
-		printf("Received %s from server\n", h->name);
+		printf("Received %s from client\n", h->name);
 	    } else {
 		printf("Received empty message\n");
 	    }
@@ -51,7 +51,7 @@ client_streaming__greeter__say_hello_cb (grpc_c_context_t *context)
      */
     grpc_c_status_t status;
     status.gcs_code = 0;
-    if (context->gcc_stream->finish(context, &status)) {
+    if (context->gcc_stream->finish(context, &status, 0)) {
         printf("Failed to write status\n");
         exit(1);
     }

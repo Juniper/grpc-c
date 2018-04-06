@@ -28,7 +28,7 @@ If you want to install dependencies in a different directory other than /usr/loc
 
 ```sh
 cd build/examples
-make foo.grpc-c.c
+make gencode
 make
 ```
 
