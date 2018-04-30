@@ -652,13 +652,13 @@ int grpc_c_register_method (grpc_c_server_t *server, const char *method,
 			    grpc_c_method_data_free_t *output_free);
 
 /*
- * Add insecure ip/port to grpc server
+ * Add insecure ip/port to grpc server. Returns 0 on failure
  */
 int grpc_c_server_add_insecure_http2_port (grpc_c_server_t *server, 
 					   const char *addr);
 
 /*
- * Add secure ip/port to grpc server
+ * Add secure ip/port to grpc server. Returns 0 on failure
  */
 int grpc_c_server_add_secure_http2_port (grpc_c_server_t *server, 
 					 const char *addr, 

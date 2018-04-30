@@ -860,7 +860,7 @@ int
 grpc_c_server_add_insecure_http2_port (grpc_c_server_t *server, 
 				       const char* addr) 
 {
-    if (server == NULL) return 1;
+    if (server == NULL) return 0;
 
     return grpc_server_add_insecure_http2_port(server->gcs_server, addr);
 }
@@ -873,7 +873,7 @@ grpc_c_server_add_secure_http2_port (grpc_c_server_t *server,
 				     const char *addr, 
 				     grpc_server_credentials *creds)
 {
-    if (server == NULL) return 1;
+    if (server == NULL) return 0;
 
     return grpc_server_add_secure_http2_port(server->gcs_server, addr, creds);
 }
